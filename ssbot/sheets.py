@@ -31,14 +31,30 @@ class Backend(Protocol):
     def update_cells(self, sheet: str, worksheet: str, cells: Dict[tuple, str]) -> None: ...
 
 
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+
+
 class GoogleBackend:
-    """서비스 계정으로 구글 시트에 접속한다. sheet_ids: {'main': '시트ID', ...}"""
+    """구글 시트에 접속한다. sheet_ids: {'main': '시트ID', ...}
+
+    credentials.json(서비스 계정 키)이 있으면 그것을, 없으면 이 서버(GCP VM)에 붙어 있는
+    서비스 계정을 쓴다. 키 발급이 막힌 프로젝트에서도 VM 의 API 액세스 범위에
+    Google Sheets 를 허용하면 동작한다.
+    """
 
     def __init__(self, credentials_path: str, sheet_ids: Dict[str, str]):
         import gspread
 
         self._gspread = gspread
-        self._client = gspread.service_account(filename=credentials_path)
+        if credentials_path and Path(credentials_path).exists():
+            self._client = gspread.service_account(filename=credentials_path)
+            self.identity = 'credentials.json'
+        else:
+            import google.auth
+
+            credentials, _ = google.auth.default(scopes=SCOPES)
+            self._client = gspread.authorize(credentials)
+            self.identity = getattr(credentials, 'service_account_email', 'VM 서비스 계정')
         self._ids = {key: value for key, value in sheet_ids.items() if value}
         self._spreadsheets: Dict[str, object] = {}
         self._lock = threading.Lock()

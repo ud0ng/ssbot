@@ -112,12 +112,24 @@
 
 계정마다: 환경설정 → **개발** → **새 애플리케이션** → 이름 아무거나, 권한 `read` `write` 체크 → 저장 → **액세스 토큰** 복사.
 
-### 2. 구글 서비스 계정
+### 2. 구글 시트 접근 권한
 
-1. [Google Cloud 콘솔](https://console.cloud.google.com) → **API 및 서비스 → 라이브러리** → `Google Sheets API` **사용**
-2. **API 및 서비스 → 사용자 인증 정보 → 사용자 인증 정보 만들기 → 서비스 계정** → 이름 `ssbot` → 완료
-3. 만든 서비스 계정 → **키** 탭 → **키 추가 → 새 키 만들기 → JSON** → 파일이 내려받아집니다 (= credentials.json)
-4. 서비스 계정 이메일(`ssbot@….iam.gserviceaccount.com`)을 네 시트 모두에 **편집자로 공유**
+[Google Cloud 콘솔](https://console.cloud.google.com) → **API 및 서비스 → 라이브러리** → `Google Sheets API` **사용**.
+그다음 둘 중 하나:
+
+**A. GCP VM 에서 돌릴 때 (키 파일 없이, 권장)** — 키 발급이 막힌 프로젝트(`iam.disableServiceAccountKeyCreation`)도 이 방법은 됩니다.
+
+VM 에 시트 권한 주기: 콘솔 오른쪽 위 **Cloud Shell(>_)** 을 열고, `VM이름` 과 `영역`(VM 목록의 '영역' 칸, 예: asia-northeast3-a)을 바꿔 실행합니다. VM 이 1~2분 꺼졌다 켜지며, 마스토돈과 자동봇은 자동으로 다시 켜집니다.
+
+```bash
+gcloud compute instances stop VM이름 --zone=영역
+gcloud compute instances set-service-account VM이름 --zone=영역 --scopes=https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/cloud-platform
+gcloud compute instances start VM이름 --zone=영역
+```
+
+설치 스크립트가 마지막에 알려 주는 **VM 서비스 계정 이메일**(`숫자-compute@developer.gserviceaccount.com`)을 네 시트 모두에 **편집자로 공유**합니다.
+
+**B. 서비스 계정 키(credentials.json)** — **API 및 서비스 → 사용자 인증 정보 → 서비스 계정 만들기** → **키 → JSON** 으로 받은 파일을 `~/ssbot/credentials.json` 에 넣고, 서비스 계정 이메일을 시트에 편집자로 공유합니다.
 
 ### 3. 서버에 설치
 
@@ -125,7 +137,7 @@
 curl -fsSL https://raw.githubusercontent.com/ud0ng/ssbot/main/install.sh | bash
 ```
 
-질문에 답하고, 마지막 안내대로 `credentials.json` 을 넣은 뒤 `sudo systemctl restart ssbot`.
+질문에 답하면 설치와 함께 봇이 켜집니다. 마지막에 나오는 안내(시트에 공유할 이메일 등)를 따르세요.
 
 ### 운영
 

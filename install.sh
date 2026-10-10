@@ -116,17 +116,25 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable ${SERVICE} >/dev/null 2>&1
 
+META=http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default
 if [[ -f credentials.json ]]; then
-  sudo systemctl restart ${SERVICE}
+  echo 'credentials.json(서비스 계정 키)으로 구글 시트에 접속합니다.'
+elif SA_EMAIL=$(curl -fs -H 'Metadata-Flavor: Google' "$META/email" 2>/dev/null); then
+  SA_SCOPES=$(curl -fs -H 'Metadata-Flavor: Google' "$META/scopes" 2>/dev/null || true)
   echo
-  echo '자동봇을 시작했습니다. 상태 확인: sudo systemctl status ssbot   로그: tail -f ~/ssbot/logs/bot.log'
-else
-  cat <<EOF
+  echo "이 서버(GCP VM)의 서비스 계정으로 구글 시트에 접속합니다: ${SA_EMAIL}"
+  echo '→ 이 이메일을 시트마다 [공유]에 편집자로 추가하세요.'
+  if ! grep -q 'auth/spreadsheets' <<< "$SA_SCOPES"; then
+    cat <<'WARN'
 
-남은 일: 구글 서비스 계정 키(credentials.json)를 넣고 봇을 켭니다.
-  1) nano ${DIR}/credentials.json
-     → 내려받은 JSON 파일 내용을 통째로 붙여넣고 Ctrl+O, Enter, Ctrl+X
-  2) sudo systemctl restart ssbot
-  3) 로그 확인: tail -f ${DIR}/logs/bot.log
-EOF
+⚠ 이 VM 에 아직 구글 시트 권한(auth/spreadsheets)이 없습니다. README 의 'VM 에 시트 권한 주기'를 따라
+  Cloud Shell 에서 VM 을 잠시 끄고 권한을 추가한 뒤 다시 켜 주세요.
+WARN
+  fi
+else
+  echo '구글 시트 인증 정보가 없습니다. credentials.json 을 넣거나 GCP VM 에서 실행하세요.'
 fi
+
+sudo systemctl restart "${SERVICE}"
+echo
+echo '자동봇을 시작했습니다. 상태 확인: sudo systemctl status ssbot   로그: tail -f ~/ssbot/logs/bot.log'

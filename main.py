@@ -43,6 +43,7 @@ class App:
 
         local_dir = os.getenv('LOCAL_SHEETS_DIR')
         backend = CsvBackend(local_dir) if local_dir else GoogleBackend(config.credentials_path, config.sheet_ids)
+        logger.info('구글 시트 인증: %s', getattr(backend, 'identity', '로컬 CSV'))
         self.sheets = Sheets(backend, ttl=config.cache_seconds)
 
         tokens = {MAIN: config.bot_token, **config.accounts}
