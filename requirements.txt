@@ -1,0 +1,6 @@
+Mastodon.py==1.8.1
+gspread==6.1.4
+google-auth==2.23.4
+python-dotenv==1.0.0
+requests==2.31.0
+beautifulsoup4==4.12.3
