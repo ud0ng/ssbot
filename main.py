@@ -19,7 +19,7 @@ from ssbot.config import Config, now_kst
 from ssbot.mastodon_io import MAIN, Hub, html_to_text, listen, missed_mentions, reply_visibility
 from ssbot.reservation import ReservationScheduler
 from ssbot.rewards import TootRewards
-from ssbot.sheets import CsvBackend, GoogleBackend, Sheets
+from ssbot.sheets import SHEET_NAMES, CsvBackend, GoogleBackend, SheetAccessError, Sheets
 from ssbot.state import State
 from ssbot.story import StoryRunner
 from ssbot.text import normalize_key
@@ -98,8 +98,11 @@ class App:
             if reply is not None:
                 self.hub.post(MAIN, reply.text, reply_visibility(status['visibility']), status['id'],
                               prefix=self._mentions(status, sender_acct), media_urls=reply.media_urls)
-        except Exception:
-            logger.exception('명령어 처리 실패: @%s [%s]', sender_acct, command)
+        except Exception as error:
+            if isinstance(error, SheetAccessError):
+                logger.error('명령어 처리 실패: @%s [%s] — %s', sender_acct, command, error)
+            else:
+                logger.exception('명령어 처리 실패: @%s [%s]', sender_acct, command)
             try:
                 self.hub.post(MAIN, '명령어를 처리하는 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.',
                               reply_visibility(status['visibility']), status['id'], prefix=f'@{sender_acct} ')
@@ -141,9 +144,15 @@ class App:
 
     def _loop(self, name: str, interval: float, job) -> None:
         def run():
+            last_problem = None
             while True:
                 try:
                     job()
+                    last_problem = None
+                except SheetAccessError as error:
+                    if str(error) != last_problem:   # 같은 문제는 한 번만 알린다
+                        logger.error('%s', error)
+                        last_problem = str(error)
                 except Exception:
                     logger.exception('%s 작업 실패', name)
                 time.sleep(interval)
@@ -154,7 +163,22 @@ class App:
         self.rewards.every, self.rewards.amount = current.toot_reward_every, current.toot_reward_amount
         self.rewards.run_once(self.hub.toot_count)
 
+    def check_sheets(self) -> None:
+        """시작할 때 연결한 시트를 하나씩 열어 보고 결과를 남긴다."""
+        for key, label in SHEET_NAMES.items():
+            if not self.sheets.has(key):
+                logger.info('  - %s 시트: 연결 안 함', label)
+                continue
+            try:
+                titles = self.sheets.titles(key)
+                logger.info('  ✓ %s 시트: 탭 %d개 (%s)', label, len(titles), ', '.join(titles[:8]))
+            except SheetAccessError as error:
+                logger.error('  ✗ %s', error)
+            except Exception:
+                logger.exception('  ✗ %s 시트를 여는 중 오류', label)
+
     def run(self) -> None:
+        self.check_sheets()
         listeners = [MAIN]
         if self._story_listener() != MAIN:
             listeners.append(self._story_listener())

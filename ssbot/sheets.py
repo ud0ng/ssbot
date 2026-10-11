@@ -24,6 +24,13 @@ class WorksheetNotFound(LookupError):
     pass
 
 
+class SheetAccessError(RuntimeError):
+    """시트를 열 수 없음 (공유 안 됨, ID 틀림, 엑셀 파일 등). 운영자가 고칠 수 있는 문제."""
+
+
+SHEET_NAMES = {'main': '기본', 'reservation': '예약 툿', 'story': '스토리', 'investigation': '조사'}
+
+
 class Backend(Protocol):
     def has_sheet(self, sheet: str) -> bool: ...
     def worksheet_titles(self, sheet: str) -> List[str]: ...
@@ -66,7 +73,20 @@ class GoogleBackend:
     def _spreadsheet(self, sheet: str):
         with self._lock:
             if sheet not in self._spreadsheets:
-                self._spreadsheets[sheet] = self._client.open_by_key(self._ids[sheet])
+                try:
+                    self._spreadsheets[sheet] = self._client.open_by_key(self._ids[sheet])
+                except PermissionError as error:
+                    raise SheetAccessError(
+                        f"'{SHEET_NAMES.get(sheet, sheet)}' 시트({self._ids[sheet]})에 접근할 수 없습니다. "
+                        f'시트 [공유]에 {self.identity} 를 편집자로 추가했는지, 시트 ID 가 맞는지 확인하세요.'
+                    ) from error
+                except self._gspread.exceptions.APIError as error:
+                    if 'Office file' in str(error):
+                        raise SheetAccessError(
+                            f"'{SHEET_NAMES.get(sheet, sheet)}' 시트({self._ids[sheet]})가 구글 시트가 아니라 엑셀 파일입니다. "
+                            '드라이브에서 파일 → Google Sheets로 저장 후 새 시트 ID 를 쓰세요.'
+                        ) from error
+                    raise
             return self._spreadsheets[sheet]
 
     def worksheet_titles(self, sheet: str) -> List[str]:
