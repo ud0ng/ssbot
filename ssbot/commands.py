@@ -23,6 +23,7 @@ from . import game
 from .config import Config, now_kst
 from .game import Character, Ledger, find_item_key, format_items, parse_items, parse_stat_changes
 from .investigation import Investigation
+from .options import Recorder, effective
 from .sheets import Sheets, cell, header_index
 from .state import State
 from .text import DiceError, amount, is_dice, josa, normalize_key, render, roll, split_options
@@ -72,13 +73,19 @@ def describe_items(items) -> str:
 class Processor:
     def __init__(self, config: Config, sheets: Sheets, state: State,
                  rng: Optional[random.Random] = None, clock: Callable[[], datetime] = now_kst):
+        self.base_config = config
         self.config = config
         self.sheets = sheets
         self.state = state
         self.rng = rng or random.Random()
         self.clock = clock
         self.ledger = Ledger(sheets)
-        self.investigation = Investigation(config, sheets, state, self.ledger, self.rng, clock)
+        self.recorder = Recorder(sheets, clock)
+        self.investigation = Investigation(config, sheets, state, self.ledger, self.rng, clock, self.recorder)
+
+    def effective_config(self) -> Config:
+        """설정 탭을 반영한 설정 (시트에서 바꾸면 다음 명령어부터 적용)."""
+        return effective(self.base_config, self.sheets)
 
     # ------------------------------------------------------------ 입구
 
@@ -88,6 +95,10 @@ class Processor:
         key = normalize_key(head)
         args = parts[1:]
         caster = game.display_name(self.sheets, request.user, request.display_name)
+        self.config = self.effective_config()
+        self.investigation.config = self.config
+        if self.config.is_admin(request.user):
+            request.is_admin = True
 
         for handler in (self._admin, self._basic, self._shop, self._stats, self._options):
             reply = handler(request, key, head, args, caster)
@@ -146,6 +157,7 @@ class Processor:
                         character.money += delta
                         self.ledger.save(character, money=True)
                         lines.append(f'{character.name}: {delta:+d} → {self._money(character.money)}')
+                        self.recorder.record(character.name, character.acct, '운영진', f'소지금 {delta:+d} (@{request.user})')
                 elif key in ('아이템추가', '아이템차감'):
                     sign = 1 if key == '아이템추가' else -1
                     changes = parse_items(args[0])
@@ -155,6 +167,7 @@ class Processor:
                             character.items[existing] = max(0, character.items.get(existing, 0) + sign * count)
                         self.ledger.save(character, items=True)
                         lines.append(f'{character.name}: {describe_items(character.items)}')
+                        self.recorder.record(character.name, character.acct, '운영진', f'{head}: {args[0]} (@{request.user})')
                 else:
                     stat = head[:-2].strip()
                     if any(character.stat_key(stat) is None for character in targets):
@@ -166,6 +179,7 @@ class Processor:
                         character.stats[stat_key] = str(before + delta)
                         self.ledger.save(character, stats=[stat_key])
                         lines.append(f'{character.name}: {stat_key} {before} → {before + delta}')
+                        self.recorder.record(character.name, character.acct, '운영진', f'{stat_key} {delta:+d} (@{request.user})')
             except DiceError as error:
                 return str(error)
 
@@ -271,6 +285,7 @@ class Processor:
                 existing = find_item_key(character.items, item.name) or item.name
                 character.items[existing] = character.items.get(existing, 0) + count
                 self.ledger.save(character, money=True, items=True)
+                self.recorder.record(character.name, character.acct, '구매', f'{item.name} {count}개 (-{self._money(total)})')
                 return f'{item.name} {with_unit(count)}{josa(with_unit(count), "을", "를")} 구매했습니다. (소지금: {self._money(character.money)})'
 
             # 소모
@@ -279,6 +294,7 @@ class Processor:
                 return f"'{args[0]}'{josa(args[0], '을', '를')} 가지고 있지 않습니다."
             character.items[existing] -= 1
             self.ledger.save(character, items=True)
+            self.recorder.record(character.name, character.acct, '소모', existing)
             return f'{existing}{josa(existing, "을", "를")} 소모했습니다. (남은 수량: {character.items[existing]}개)'
 
     # ------------------------------------------------------------ 스탯
@@ -327,6 +343,7 @@ class Processor:
 
             character.items[existing] -= 1
             self.ledger.save(character, items=True, stats=changed_stats)
+            self.recorder.record(character.name, character.acct, '사용', ' '.join([existing] + [line[2:] for line in lines[1:]]))
             return '\n'.join(lines)
 
     # ------------------------------------------------------------ 옵션
@@ -367,6 +384,7 @@ class Processor:
                 receiver.money += value
                 self.ledger.save(giver, money=True)
                 self.ledger.save(receiver, money=True)
+                self.recorder.record(giver.name, giver.acct, '양도', f'{self._money(value)} → {receiver.name}')
                 return f'{receiver.name}에게 {self._money(value)}{josa(self._money(value), "을", "를")} 양도했습니다. (소지금: {self._money(giver.money)})'
 
             wanted = parse_items(args[0])
@@ -385,6 +403,7 @@ class Processor:
                 moved.append(f'{existing} {count}개')
             self.ledger.save(giver, items=True)
             self.ledger.save(receiver, items=True)
+            self.recorder.record(giver.name, giver.acct, '양도', f"{', '.join(moved)} → {receiver.name}")
             return f"{receiver.name}에게 {', '.join(moved)}{josa(moved[-1], '을', '를')} 양도했습니다."
 
     def _attendance(self, request):
@@ -400,6 +419,8 @@ class Processor:
             character.money += self.config.attendance_reward
             self.ledger.save(character, money=True)
             self.state.set('attendance', character.acct.lower(), today)
+            self.recorder.attendance(character.name, character.acct)
+            self.recorder.record(character.name, character.acct, '출석', f'+{self._money(self.config.attendance_reward)}')
             reward = self._money(self.config.attendance_reward)
             return f'출석 완료! {reward}{josa(reward, "을", "를")} 받았습니다. (소지금: {self._money(character.money)})'
 
@@ -465,6 +486,7 @@ class Processor:
             self.ledger.save(character, money=True, items=True)
 
         result = f"➭ '{item}' {count}개 획득" if count > 0 else f'➭ {item}'
+        self.recorder.record(character.name, character.acct, '랜덤박스', f'{box_name} ({paid}) → {result[2:]}')
         return f'{box_name}{josa(box_name, "을", "를")} 열었습니다! ({paid})\n\n{result}'
 
     # ------------------------------------------------------------ 키워드

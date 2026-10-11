@@ -29,6 +29,7 @@ class Backend(Protocol):
     def worksheet_titles(self, sheet: str) -> List[str]: ...
     def values(self, sheet: str, worksheet: str) -> Rows: ...
     def update_cells(self, sheet: str, worksheet: str, cells: Dict[tuple, str]) -> None: ...
+    def append_rows(self, sheet: str, worksheet: str, rows: Rows) -> None: ...
 
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
@@ -89,6 +90,9 @@ class GoogleBackend:
             value_input_option='USER_ENTERED',
         )
 
+    def append_rows(self, sheet: str, worksheet: str, rows: Rows) -> None:
+        self._worksheet(sheet, worksheet).append_rows(rows, value_input_option='RAW')
+
 
 class CsvBackend:
     """폴더의 CSV 파일을 시트처럼 쓴다 (테스트·로컬 확인용). root/<sheet>/<worksheet>.csv"""
@@ -125,6 +129,15 @@ class CsvBackend:
                     rows[row - 1].append('')
                 rows[row - 1][col - 1] = str(value)
             with path.open('w', encoding='utf-8', newline='') as file:
+                csv.writer(file).writerows(rows)
+
+    def append_rows(self, sheet: str, worksheet: str, rows: Rows) -> None:
+        with self._lock:
+            path = self._path(sheet, worksheet)
+            needs_newline = path.stat().st_size > 0 and not path.read_bytes().endswith(b'\n')
+            with path.open('a', encoding='utf-8', newline='') as file:
+                if needs_newline:
+                    file.write('\r\n')
                 csv.writer(file).writerows(rows)
 
 
@@ -175,6 +188,10 @@ class Sheets:
 
     def update(self, sheet: str, worksheet: str, cells: Dict[tuple, str]) -> None:
         self.backend.update_cells(sheet, worksheet, cells)
+        self.invalidate(sheet, worksheet)
+
+    def append(self, sheet: str, worksheet: str, rows: Rows) -> None:
+        self.backend.append_rows(sheet, worksheet, rows)
         self.invalidate(sheet, worksheet)
 
     def invalidate(self, sheet: Optional[str] = None, worksheet: Optional[str] = None) -> int:

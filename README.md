@@ -46,15 +46,20 @@
 
 ## 시트
 
-네 시트는 각각 따로 만들고 `.env` 에 ID 를 넣습니다. 비워 둔 시트의 기능은 꺼집니다.
-아래 예시 시트를 열어 **파일 → 사본 만들기**로 시작하면 편합니다.
+네 시트는 각각 따로 만들고  에 ID 를 넣습니다. 비워 둔 시트의 기능은 꺼집니다.
 
-- [기본 & 상점 & 스탯 시트](https://docs.google.com/spreadsheets/d/1iTqRwJChqTCpfpMaleLEt2i1h2MTroyWAbNktZF8KjA/edit?usp=sharing)
-- [예약 툿 시트](https://docs.google.com/spreadsheets/d/1ui6iVgG-nDLF2RDVd50bz2jVeBU9JRp3f5oCx3a4eQE/edit?usp=sharing)
-- [스토리 자동진행 시트](https://docs.google.com/spreadsheets/d/1K0mXU2NOQ71HF9Mo6Zs_cFHlpDPeRFm_N8v7Pts58cY/edit?usp=sharing)
-- [조사 시트](https://docs.google.com/spreadsheets/d/1kccCpDwSaQyaNeUxmCfyIrUNM9taJDeyfQfXTMcBQ24/edit?usp=sharing)
+**시작하기**: [templates](templates) 폴더의 엑셀 파일 4개를 구글 드라이브에 올리면 탭·헤더·예시가 다 채워진 시트가 됩니다.
+1. 파일을 내려받습니다 (파일 클릭 → 오른쪽 위 다운로드 버튼).
+2. [구글 드라이브](https://drive.google.com) → **새로 만들기 → 파일 업로드**.
+3. 올라간 파일을 더블클릭 → 위쪽 **Google Sheets로 열기** → 구글 시트로 새로 만들어집니다 (원래 엑셀 파일은 지워도 됩니다).
+4. 주소의  와  사이가 시트 ID 입니다.
 
-시트 ID 는 주소의 `/d/` 와 `/edit` 사이 문자열입니다.
+| 파일 | 시트 |
+|---|---|
+|  | 기본 시트 (MAIN_SHEET_ID) |
+|  | 예약 툿 (RESERVATION_SHEET_ID) |
+|  | 스토리 (STORY_SHEET_ID) |
+|  | 조사 (INVESTIGATION_SHEET_ID) |
 
 ### 기본 시트 (MAIN_SHEET_ID)
 
@@ -68,6 +73,9 @@
 | 상점 | 아이템명 \| 가격 \| 설명 \| 스탯 \| 수치 | 가격이 숫자가 아니면 비매품. 스탯 `사용 불가`. 수치는 `5`, `-20`, `1d10`, `-(1d6+3)` |
 | 운세 | 문구 | |
 | 키워드 | 키워드 \| 답변 \| (이미지) | 이미지 칸에 이미지 주소(https://…)를 적으면 첨부 |
+| 설정 | 항목 | 값 | 설명 | 재화 이름, 양도(사용/미사용), 출석 보상, 툿 보상 기준·재화, 하루 조사 횟수, 랜덤박스 명령어, 키워드 이미지, 운영진. **서버의 .env 보다 우선**하고 바꾸면 다음 명령어부터 적용 |
+| 출석부 | 날짜 | 시간 | 이름 | 아이디 | [출석] 할 때마다 자동으로 한 줄 추가 |
+| 기록 | 시간 | 이름 | 아이디 | 종류 | 내용 | 구매·사용·소모·양도·출석·랜덤박스·조사·툿 보상·운영진 변경을 자동으로 기록 (탭을 지우면 기록 안 함) |
 | 랜덤박스 | 박스명 \| 가격 \| 아이템 \| 수량 \| 확률 | 박스명이 같은 줄끼리 한 박스. 가격은 첫 줄에. 가방에 박스명 아이템이 있으면 그걸 쓰고, 없으면 가격만큼 재화를 씀. 확률은 가중치(숫자) |
 
 **치환** (키워드 답변·진입/조사 문구·예약 툿·스토리)

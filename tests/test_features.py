@@ -40,8 +40,9 @@ def test_closed_place_and_unknown_point(bot):
     assert "'철봉'이라는 조사 포인트가 없습니다" in bot('조사/철봉')
 
 
-def test_daily_investigation_limit(bot):
-    bot.processor.config.investigation_daily_limit = 1
+def test_daily_investigation_limit(bot, sheet_dir):
+    path = sheet_dir / 'main' / '설정.csv'
+    path.write_text(path.read_text(encoding='utf-8').replace('하루 조사 횟수,0', '하루 조사 횟수,1'), encoding='utf-8')
     bot('진입/교실')
     assert '(오늘 조사 1/1회)' in bot('조사/책상')
     assert '모두 사용했습니다' in bot('조사/칠판')
@@ -103,3 +104,44 @@ def test_toot_rewards_high_water_mark(sheet_dir, tmp_path):
     assert rewards.run_once(lookup) == {}
     counts['elena'] = 29
     assert rewards.run_once(lookup) == {}               # 최고치(25)를 넘지 않았으니 없음
+
+
+# ------------------------------------------------------------ 설정 · 기록 탭
+
+def _set(sheet_dir, item, value):
+    path = sheet_dir / 'main' / '설정.csv'
+    rows = list(csv.reader(path.open(encoding='utf-8')))
+    for row in rows:
+        if row[0] == item:
+            row[1] = value
+    with path.open('w', encoding='utf-8', newline='') as file:
+        csv.writer(file).writerows(rows)
+
+
+def _records(sheet_dir, name):
+    return list(csv.reader((sheet_dir / 'main' / f'{name}.csv').open(encoding='utf-8')))[1:]
+
+
+def test_settings_tab_overrides(bot, sheet_dir):
+    _set(sheet_dir, '재화 이름', '골드')
+    assert '소지금: 12골드' in bot('가방')
+    _set(sheet_dir, '출석 보상', '0')
+    assert '없는 명령어' in bot('출석')
+    _set(sheet_dir, '양도', '미사용')
+    assert '없는 명령어' in bot('양도/1/소피아')
+
+
+def test_settings_tab_admins(bot, sheet_dir):
+    assert '운영진만' in bot('소지금 추가/1/엘레나', user='Sophia')
+    _set(sheet_dir, '운영진', 'Sophia, 다른사람')
+    assert '완료' in bot('소지금 추가/1/엘레나', user='Sophia')
+
+
+def test_records_and_attendance_book(bot, sheet_dir):
+    bot('구매/사과')
+    bot('출석')
+    bot('양도/1코인/소피아')
+    kinds = [row[3] for row in _records(sheet_dir, '기록')]
+    assert kinds == ['구매', '출석', '양도']
+    assert _records(sheet_dir, '기록')[0][1:3] == ['엘레나', 'Elena']
+    assert _records(sheet_dir, '출석부') == [['2026-10-11', '12:00', '엘레나', 'Elena']]

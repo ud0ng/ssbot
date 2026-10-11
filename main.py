@@ -52,7 +52,8 @@ class App:
         self.story = StoryRunner(self.sheets, self._post_as, config.story_visibility)
         self.reservations = ReservationScheduler(self.sheets, self.state, self._post_as,
                                                  config.reservation_catch_up_minutes, config.public_visibility)
-        self.rewards = TootRewards(self.sheets, self.state, self.processor.ledger, config.toot_reward_every, config.toot_reward_amount)
+        self.rewards = TootRewards(self.sheets, self.state, self.processor.ledger, config.toot_reward_every, config.toot_reward_amount,
+                                   self.processor.recorder)
         self._handled = deque(maxlen=500)
         self._handled_lock = threading.Lock()
 
@@ -116,7 +117,7 @@ class App:
         return self.config.story_account if self.config.story_account in self.hub.clients else MAIN
 
     def _handle_story(self, status, sender_acct: str, command: str, from_own_account: bool) -> None:
-        if not (from_own_account or self.config.is_admin(sender_acct)):
+        if not (from_own_account or self.processor.effective_config().is_admin(sender_acct)):
             message = '스토리 진행은 운영진만 할 수 있습니다.'
         else:
             parts = [part.strip() for part in command.split('/')]
@@ -147,6 +148,11 @@ class App:
                 time.sleep(interval)
         threading.Thread(target=run, name=name, daemon=True).start()
 
+    def _toot_rewards(self) -> None:
+        current = self.processor.effective_config()
+        self.rewards.every, self.rewards.amount = current.toot_reward_every, current.toot_reward_amount
+        self.rewards.run_once(self.hub.toot_count)
+
     def run(self) -> None:
         listeners = [MAIN]
         if self._story_listener() != MAIN:
@@ -161,10 +167,8 @@ class App:
         if self.sheets.has('reservation'):
             self._loop('reservation', 20, lambda: self.reservations.tick(now_kst()))
             logger.info('예약 툿 확인 시작 (20초마다)')
-        if self.config.toot_reward_every > 0:
-            self._loop('toot-rewards', self.config.toot_reward_interval_minutes * 60,
-                       lambda: self.rewards.run_once(self.hub.toot_count))
-            logger.info('툿 수 보상 확인 시작 (%d분마다)', self.config.toot_reward_interval_minutes)
+        # 툿 수 보상: 설정 탭(툿 보상 기준/재화)을 매번 다시 읽는다. 0 이면 아무것도 안 한다.
+        self._loop('toot-rewards', self.config.toot_reward_interval_minutes * 60, self._toot_rewards)
 
         logger.info('자동봇이 시작되었습니다.')
         while True:

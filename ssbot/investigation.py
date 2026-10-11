@@ -31,13 +31,14 @@ UNAVAILABLE = {'불가능', 'x', 'X', 'false', 'FALSE'}
 
 class Investigation:
     def __init__(self, config: Config, sheets: Sheets, state: State, ledger: Ledger,
-                 rng: random.Random, clock: Callable[[], datetime]):
+                 rng: random.Random, clock: Callable[[], datetime], recorder=None):
         self.config = config
         self.sheets = sheets
         self.state = state
         self.ledger = ledger
         self.rng = rng
         self.clock = clock
+        self.recorder = recorder
 
     def handle(self, user: str, key: str, args: list, caster: str) -> Optional[str]:
         if key not in ('장소목록', '진입', '조사') or not self.sheets.has(SHEET):
@@ -159,4 +160,6 @@ class Investigation:
                         changed_stats.append(stat_key)
             if character is not None:
                 self.ledger.save(character, items=bool(items), stats=changed_stats)
+                if self.recorder is not None and effects:
+                    self.recorder.record(character.name, character.acct, '조사', ', '.join(effect[2:] for effect in effects))
         return effects

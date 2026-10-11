@@ -19,12 +19,13 @@ CountLookup = Callable[[str], Optional[int]]   # acct → 툿 수 (모르면 Non
 
 
 class TootRewards:
-    def __init__(self, sheets: Sheets, state: State, ledger: Ledger, every: int, amount: int):
+    def __init__(self, sheets: Sheets, state: State, ledger: Ledger, every: int, amount: int, recorder=None):
         self.sheets = sheets
         self.state = state
         self.ledger = ledger
         self.every = every
         self.amount = amount
+        self.recorder = recorder
 
     def run_once(self, lookup: CountLookup) -> dict:
         """보상한 캐릭터 이름 → 받은 재화."""
@@ -51,6 +52,8 @@ class TootRewards:
                     character.money += steps * self.amount
                     self.ledger.save(character, money=True)
                     rewarded[character.name] = steps * self.amount
+                    if self.recorder is not None:
+                        self.recorder.record(character.name, character.acct, '툿 보상', f'툿 {count}개 → +{steps * self.amount}')
                 self.state.set('toot_counts', key, count)
         if rewarded:
             logger.info('툿 수 보상: %s', rewarded)
