@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import sys
@@ -175,8 +176,26 @@ class App:
             time.sleep(3600)
 
 
+def load_env(path: str = '.env') -> None:
+    """.env 를 읽는다. 한글이 UTF-8 이 아니게 저장돼 있어도(터미널 입력 문제) 멈추지 않는다."""
+    env = Path(path)
+    if not env.exists():
+        return
+    raw = env.read_bytes()
+    for encoding in ('utf-8', 'cp949'):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw.decode('utf-8', errors='replace')
+        print('경고: .env 에 깨진 글자가 있습니다. 재화 이름 같은 한글 값은 시트의 설정 탭에서 지정하세요.', file=sys.stderr)
+    load_dotenv(stream=io.StringIO(text))
+
+
 def main() -> None:
-    load_dotenv()
+    load_env()
     setup_logging()
     config = Config.from_env()
     missing = [name for name, value in (('MASTODON_API_BASE_URL', config.api_base_url),
