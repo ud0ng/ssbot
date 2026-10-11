@@ -8,6 +8,7 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from collections import deque
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -25,6 +26,8 @@ from ssbot.story import StoryRunner
 from ssbot.text import normalize_key
 
 logger = logging.getLogger('ssbot')
+
+POLL_SECONDS = 15
 
 
 def setup_logging() -> None:
@@ -85,7 +88,9 @@ class App:
             if is_story_command and listener == self._story_listener():
                 self._handle_story(status, sender_acct, command, from_own_account)
                 return
-            if listener != MAIN or from_own_account:
+            # 메인 봇 자신이 쓴 툿만 무시한다 (답장끼리 끝없이 주고받지 않게).
+            # NOTICE 처럼 사람이 함께 쓰는 계정(manager)의 명령어는 처리한다.
+            if listener != MAIN or str(sender['id']) == str(self.hub.me[MAIN]['id']):
                 return
 
             logger.info('명령어 @%s [%s]', sender_acct, command)
@@ -177,6 +182,28 @@ class App:
             except Exception:
                 logger.exception('  ✗ %s 시트를 여는 중 오류', label)
 
+    def _catch_up(self, name: str, first_run: bool = False) -> None:
+        """아직 처리하지 않은 멘션을 처리한다. 처음 켤 때는 최근 10분 안의 멘션만."""
+        since = self.state.get('last_notification', name)
+        if since is None:
+            try:
+                recent = self.hub.client(name).notifications(types=['mention'], limit=20)
+            except Exception:
+                logger.exception('알림 확인 실패: %s', name)
+                return
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
+            for notification in reversed(recent):
+                created = notification['created_at']
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                if created >= cutoff:
+                    self.on_mention(name, notification)
+            if recent:
+                self._remember(name, recent[0]['id'])
+            return
+        for notification in missed_mentions(self.hub, name, since):
+            self.on_mention(name, notification)
+
     def run(self) -> None:
         self.check_sheets()
         listeners = [MAIN]
@@ -184,10 +211,14 @@ class App:
             listeners.append(self._story_listener())
 
         for name in listeners:
-            for notification in missed_mentions(self.hub, name, self.state.get('last_notification', name)):
-                self.on_mention(name, notification)
-            listen(self.hub, name, self.on_mention)
-            logger.info('멘션 수신 시작: %s', name)
+            self._catch_up(name, first_run=self.state.get('last_notification', name) is None)
+            try:
+                listen(self.hub, name, self.on_mention)
+                logger.info('멘션 수신 시작: %s (실시간 + %d초마다 확인)', name, POLL_SECONDS)
+            except Exception:
+                logger.exception('%s 실시간 수신 연결 실패 — %d초마다 확인하는 방식으로만 받습니다.', name, POLL_SECONDS)
+            # 실시간 수신(스트리밍)이 프록시 등에 막혀도 답장하도록 주기적으로 알림을 직접 확인한다.
+            self._loop(f'poll-{name}', POLL_SECONDS, lambda name=name: self._catch_up(name))
 
         if self.sheets.has('reservation'):
             self._loop('reservation', 20, lambda: self.reservations.tick(now_kst()))
