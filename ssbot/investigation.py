@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Callable, Optional
 
 from .config import Config
-from .game import Ledger, find_item_key, parse_items, parse_stat_changes, _to_int
+from .server import LedgerError, ServerLedger, ServerUnavailable, parse_items, parse_stat_changes
 from .sheets import Sheets, WorksheetNotFound, cell, header_index
 from .state import State
 from .text import DiceError, amount, josa, normalize_key, render
@@ -30,15 +30,14 @@ UNAVAILABLE = {'불가능', 'x', 'X', 'false', 'FALSE'}
 
 
 class Investigation:
-    def __init__(self, config: Config, sheets: Sheets, state: State, ledger: Ledger,
-                 rng: random.Random, clock: Callable[[], datetime], recorder=None):
+    def __init__(self, config: Config, sheets: Sheets, state: State, ledger: ServerLedger,
+                 rng: random.Random, clock: Callable[[], datetime]):
         self.config = config
         self.sheets = sheets
         self.state = state
         self.ledger = ledger
         self.rng = rng
         self.clock = clock
-        self.recorder = recorder
 
     def handle(self, user: str, key: str, args: list, caster: str) -> Optional[str]:
         if key not in ('장소목록', '진입', '조사') or not self.sheets.has(SHEET):
@@ -138,28 +137,28 @@ class Investigation:
         if not items and not stats:
             return []
 
-        with self.sheets.write_lock:
+        try:
             character = self.ledger.find(user, fresh=True) if self.ledger.available else None
-            effects = []
-            changed_stats = []
-            for name, count in items.items():
-                effects.append(f"➭ '{name}' {count}개 획득")
-                if character is not None:
-                    existing = find_item_key(character.items, name) or name
-                    character.items[existing] = character.items.get(existing, 0) + count
-            for stat, expression in stats:
-                try:
-                    delta = amount(expression, self.rng)
-                except DiceError:
-                    continue
-                effects.append(f'➭ {stat} {delta:+d}')
-                if character is not None:
-                    stat_key = character.stat_key(stat)
-                    if stat_key is not None:
-                        character.stats[stat_key] = str(_to_int(character.stats[stat_key]) + delta)
-                        changed_stats.append(stat_key)
-            if character is not None:
-                self.ledger.save(character, items=bool(items), stats=changed_stats)
-                if self.recorder is not None and effects:
-                    self.recorder.record(character.name, character.acct, '조사', ', '.join(effect[2:] for effect in effects))
+        except ServerUnavailable:
+            character = None
+        effects = []
+        stat_deltas = {}
+        for name, count in items.items():
+            effects.append(f"➭ '{name}' {count}개 획득")
+        for stat, expression in stats:
+            try:
+                delta = amount(expression, self.rng)
+            except DiceError:
+                continue
+            effects.append(f'➭ {stat} {delta:+d}')
+            # 캐릭터 관리에 있는 스탯만 바꾼다 (상태 수치·없는 스탯은 문구만)
+            stat_key = character.stat_key(stat) if character is not None else None
+            if stat_key is not None:
+                stat_deltas[stat_key] = stat_deltas.get(stat_key, 0) + delta
+        if character is not None and (items or stat_deltas):
+            try:
+                self.ledger.apply([{'acct': character.acct, 'items': dict(items), 'stats': stat_deltas}],
+                                  'investigation', ', '.join(effect[2:] for effect in effects))
+            except LedgerError as error:
+                effects.append(f'(반영하지 못했습니다: {error})')
         return effects

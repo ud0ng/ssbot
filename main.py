@@ -20,6 +20,7 @@ from ssbot.config import Config, now_kst
 from ssbot.mastodon_io import MAIN, Hub, html_to_text, listen, missed_mentions, reply_visibility
 from ssbot.reservation import ReservationScheduler
 from ssbot.rewards import TootRewards
+from ssbot.server import Api, ServerLedger, ServerUnavailable
 from ssbot.sheets import SHEET_NAMES, CsvBackend, GoogleBackend, SheetAccessError, Sheets
 from ssbot.state import State
 from ssbot.story import StoryRunner
@@ -52,12 +53,13 @@ class App:
 
         tokens = {MAIN: config.bot_token, **config.accounts}
         self.hub = Hub(config.api_base_url, tokens, config.max_length)
-        self.processor = Processor(config, self.sheets, self.state)
+        # 캐릭터·재화·상점은 마스토돈 서버 (컨텐츠 설정의 '자동봇 계정 아이디'에 이 봇 계정이 있어야 한다)
+        self.ledger = ServerLedger(Api(config.api_base_url, config.bot_token))
+        self.processor = Processor(config, self.sheets, self.state, self.ledger)
         self.story = StoryRunner(self.sheets, self._post_as, config.story_visibility)
         self.reservations = ReservationScheduler(self.sheets, self.state, self._post_as,
                                                  config.reservation_catch_up_minutes, config.public_visibility)
-        self.rewards = TootRewards(self.sheets, self.state, self.processor.ledger, config.toot_reward_every, config.toot_reward_amount,
-                                   self.processor.recorder)
+        self.rewards = TootRewards(self.state, self.ledger)
         self._handled = deque(maxlen=500)
         self._handled_lock = threading.Lock()
 
@@ -104,7 +106,7 @@ class App:
                 self.hub.post(MAIN, reply.text, reply_visibility(status['visibility']), status['id'],
                               prefix=self._mentions(status, sender_acct), media_urls=reply.media_urls)
         except Exception as error:
-            if isinstance(error, SheetAccessError):
+            if isinstance(error, (SheetAccessError, ServerUnavailable)):
                 logger.error('명령어 처리 실패: @%s [%s] — %s', sender_acct, command, error)
             else:
                 logger.exception('명령어 처리 실패: @%s [%s]', sender_acct, command)
@@ -154,7 +156,7 @@ class App:
                 try:
                     job()
                     last_problem = None
-                except SheetAccessError as error:
+                except (SheetAccessError, ServerUnavailable) as error:
                     if str(error) != last_problem:   # 같은 문제는 한 번만 알린다
                         logger.error('%s', error)
                         last_problem = str(error)
@@ -181,6 +183,11 @@ class App:
                 logger.error('  ✗ %s', error)
             except Exception:
                 logger.exception('  ✗ %s 시트를 여는 중 오류', label)
+        try:
+            count = len(self.ledger.characters(fresh=True))
+            logger.info('  ✓ 마스토돈 캐릭터·재화: 캐릭터 %d명, 재화 %s', count, self.ledger.settings().currency)
+        except ServerUnavailable as error:
+            logger.error('  ✗ %s', error)
 
     def _catch_up(self, name: str, first_run: bool = False) -> None:
         """아직 처리하지 않은 멘션을 처리한다. 처음 켤 때는 최근 10분 안의 멘션만."""

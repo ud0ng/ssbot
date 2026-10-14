@@ -8,6 +8,9 @@
   5. 옵션               [양도/..] [출석] [랜덤박스/박스]
   6. 조사               [장소 목록] [진입/장소] [조사/포인트]
   7. 키워드 시트        운영진이 적은 키워드 답변
+
+캐릭터·돈·소지품·스탯·상점·재화 규칙은 마스토돈 서버에 있다 (server.py).
+시트에는 도움말·운세·키워드·랜덤박스·설정(키워드 이미지·조사 횟수·랜덤박스 명령어·운영진)과 예약 툿·스토리·조사가 남는다.
 """
 
 from __future__ import annotations
@@ -15,15 +18,14 @@ from __future__ import annotations
 import hashlib
 import random
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Callable, List, Optional
 
-from . import game
 from .config import Config, now_kst
-from .game import Character, Ledger, find_item_key, format_items, parse_items, parse_stat_changes
 from .investigation import Investigation
-from .options import Recorder, effective
+from .options import effective
+from .server import Character, LedgerError, ServerLedger, find_item_key, parse_items
 from .sheets import Sheets, cell, header_index
 from .state import State
 from .text import DiceError, amount, is_dice, josa, normalize_key, render, roll, split_options
@@ -39,6 +41,10 @@ DEFAULT_HELP = [
     '[랜덤/A, B, C...] 여러 옵션 중 1개를 골라 출력합니다.',
     '[운세] 오늘의 운세를 확인합니다.',
 ]
+
+# 마스토돈으로 옮긴 명령어: 시트 도움말에 남아 있어도 빼고 서버 도움말을 붙인다
+MOVED_COMMANDS = {'가방', '상점', '구매', '설명', '소모', '상태확인', '상태', '사용', '양도', '출석',
+                  '소지금추가', '소지금차감', '아이템추가', '아이템차감'}
 
 
 @dataclass
@@ -61,6 +67,15 @@ def first_command(text: str) -> Optional[str]:
     return match.group(1).strip() if match else None
 
 
+def moved_command(line: str) -> bool:
+    """도움말 줄이 마스토돈으로 옮긴 명령어인가 ('[가방]', '[구매/아이템명]', '[힘 변경/+3/이름]')."""
+    match = re.match(r'\s*\[([^\]/]+)', line or '')
+    if not match:
+        return False
+    head = normalize_key(match.group(1))
+    return head in MOVED_COMMANDS or (head.endswith('변경') and len(head) > 2)
+
+
 def with_unit(count: int) -> str:
     return f'{count}개'
 
@@ -71,21 +86,26 @@ def describe_items(items) -> str:
 
 
 class Processor:
-    def __init__(self, config: Config, sheets: Sheets, state: State,
+    def __init__(self, config: Config, sheets: Sheets, state: State, ledger: ServerLedger,
                  rng: Optional[random.Random] = None, clock: Callable[[], datetime] = now_kst):
         self.base_config = config
         self.config = config
         self.sheets = sheets
         self.state = state
+        self.ledger = ledger
         self.rng = rng or random.Random()
         self.clock = clock
-        self.ledger = Ledger(sheets)
-        self.recorder = Recorder(sheets, clock)
-        self.investigation = Investigation(config, sheets, state, self.ledger, self.rng, clock, self.recorder)
+        self.investigation = Investigation(config, sheets, state, ledger, self.rng, clock)
 
     def effective_config(self) -> Config:
-        """설정 탭을 반영한 설정 (시트에서 바꾸면 다음 명령어부터 적용)."""
-        return effective(self.base_config, self.sheets)
+        """시트 설정 탭 + 마스토돈 재화 규칙을 반영한 설정 (바꾸면 다음 명령어부터 적용)."""
+        config = effective(self.base_config, self.sheets)
+        if self.ledger.available:
+            server = self.ledger.settings()
+            config = replace(config, currency=server.currency, transfer_enabled=server.transfer_enabled,
+                             attendance_reward=server.attendance_reward, toot_reward_every=server.toot_reward_every,
+                             toot_reward_amount=server.toot_reward_amount)
+        return config
 
     # ------------------------------------------------------------ 입구
 
@@ -94,14 +114,18 @@ class Processor:
         head = parts[0]
         key = normalize_key(head)
         args = parts[1:]
-        caster = game.display_name(self.sheets, request.user, request.display_name)
         self.config = self.effective_config()
         self.investigation.config = self.config
         if self.config.is_admin(request.user):
             request.is_admin = True
+        fallback = request.display_name or request.user
+        caster = self.ledger.display_name(request.user, fallback) if self.ledger.available else fallback
 
         for handler in (self._admin, self._basic, self._shop, self._stats, self._options):
-            reply = handler(request, key, head, args, caster)
+            try:
+                reply = handler(request, key, head, args, caster)
+            except LedgerError as error:
+                reply = str(error)
             if reply is not None:
                 return reply if isinstance(reply, Reply) else Reply(reply)
 
@@ -117,14 +141,20 @@ class Processor:
 
     # ------------------------------------------------------------ 공통
 
-    def _character(self, user: str, fresh: bool = True) -> Optional[Character]:
-        return self.ledger.find(user, fresh)
+    def _character(self, user: str) -> Optional[Character]:
+        return self.ledger.find(user, fresh=True)
 
     def _not_registered(self) -> str:
-        return '관리 시트에 등록된 캐릭터가 아닙니다. 운영진에게 문의해 주세요.'
+        return '캐릭터 관리에 등록된 캐릭터가 아닙니다. 운영진에게 문의해 주세요.'
 
     def _money(self, value: int) -> str:
         return f'{value}{self.config.currency}'
+
+    def _apply_one(self, character: Character, kind: str, detail: str = '', money: int = 0, items=None, stats=None,
+                   once_per_day: bool = False) -> Character:
+        result = self.ledger.apply([{'acct': character.acct, 'money': money, 'items': dict(items or {}), 'stats': dict(stats or {})}],
+                                   kind, detail, once_per_day)
+        return result.get(character.acct.lower(), character)
 
     # ------------------------------------------------------------ 운영진
 
@@ -137,51 +167,56 @@ class Processor:
             return '운영진만 사용할 수 있는 명령어입니다.'
 
         if key in ('캐시리셋', '시트업데이트'):
-            count = self.sheets.invalidate()
-            return f'시트 캐시를 비웠습니다. ({count}개) 다음 명령어부터 시트 내용이 새로 반영됩니다.'
+            count = self.sheets.invalidate() + self.ledger.invalidate()
+            return f'캐시를 비웠습니다. ({count}개) 다음 명령어부터 시트·서버 내용이 새로 반영됩니다.'
 
         if len(args) < 2:
             return f'형식: [{head}/값/캐릭터명] (캐릭터명은 쉼표로 여러 명, 또는 전원)'
 
-        with self.sheets.write_lock:
-            targets, missing = self.ledger.targets(args[1])
-            if not targets:
-                return f"캐릭터를 찾을 수 없습니다: {', '.join(missing) or args[1]}"
+        targets, missing = self.ledger.targets(args[1])
+        if not targets:
+            return f"캐릭터를 찾을 수 없습니다: {', '.join(missing) or args[1]}"
 
-            lines = []
-            try:
-                if key in ('소지금추가', '소지금차감'):
-                    sign = 1 if key == '소지금추가' else -1
-                    for character in targets:
-                        delta = sign * abs(amount(args[0], self.rng))
-                        character.money += delta
-                        self.ledger.save(character, money=True)
-                        lines.append(f'{character.name}: {delta:+d} → {self._money(character.money)}')
-                        self.recorder.record(character.name, character.acct, '운영진', f'소지금 {delta:+d} (@{request.user})')
-                elif key in ('아이템추가', '아이템차감'):
-                    sign = 1 if key == '아이템추가' else -1
-                    changes = parse_items(args[0])
-                    for character in targets:
+        lines = []
+        detail = f'{head}/{args[0]} (@{request.user})'
+        try:
+            if key in ('소지금추가', '소지금차감'):
+                sign = 1 if key == '소지금추가' else -1
+                for character in targets:
+                    delta = sign * abs(amount(args[0], self.rng))
+                    try:
+                        updated = self._apply_one(character, 'admin', detail, money=delta)
+                        lines.append(f'{character.name}: {delta:+d} → {self._money(updated.money)}')
+                    except LedgerError as error:
+                        lines.append(f'{character.name}: {error}')
+            elif key in ('아이템추가', '아이템차감'):
+                changes = parse_items(args[0])
+                for character in targets:
+                    if key == '아이템추가':
+                        deltas = dict(changes)
+                    else:
+                        # 가진 만큼만 뺀다
+                        deltas = {}
                         for name, count in changes.items():
-                            existing = find_item_key(character.items, name) or name
-                            character.items[existing] = max(0, character.items.get(existing, 0) + sign * count)
-                        self.ledger.save(character, items=True)
-                        lines.append(f'{character.name}: {describe_items(character.items)}')
-                        self.recorder.record(character.name, character.acct, '운영진', f'{head}: {args[0]} (@{request.user})')
-                else:
-                    stat = head[:-2].strip()
-                    if any(character.stat_key(stat) is None for character in targets):
-                        return f"관리 시트에 '{stat}' 스탯이 없습니다."
-                    for character in targets:
-                        stat_key = character.stat_key(stat)
-                        before = game._to_int(character.stats[stat_key])
-                        delta = amount(args[0], self.rng)
-                        character.stats[stat_key] = str(before + delta)
-                        self.ledger.save(character, stats=[stat_key])
-                        lines.append(f'{character.name}: {stat_key} {before} → {before + delta}')
-                        self.recorder.record(character.name, character.acct, '운영진', f'{stat_key} {delta:+d} (@{request.user})')
-            except DiceError as error:
-                return str(error)
+                            owned = find_item_key(character.items, name)
+                            if owned and character.items[owned] > 0:
+                                deltas[owned] = -min(count, character.items[owned])
+                    updated = self._apply_one(character, 'admin', detail, items=deltas) if deltas else character
+                    lines.append(f'{character.name}: {describe_items(updated.items)}')
+            else:
+                stat = head[:-2].strip()
+                if any(character.stat_key(stat) is None for character in targets):
+                    if any(normalize_key(name) == normalize_key(stat) for name in targets[0].statuses):
+                        return f"'{stat}'{josa(stat, '은', '는')} 스탯으로 계산하는 상태 수치라 바꿀 수 없습니다."
+                    return f"'{stat}' 스탯이 없습니다. 마스토돈 캐릭터 관리 > 스탯을 확인해 주세요."
+                for character in targets:
+                    stat_key = character.stat_key(stat)
+                    before = int(character.stats[stat_key] or 0)
+                    delta = amount(args[0], self.rng)
+                    updated = self._apply_one(character, 'admin', detail, stats={stat_key: delta})
+                    lines.append(f'{character.name}: {stat_key} {before} → {updated.stats.get(stat_key, before + delta)}')
+        except DiceError as error:
+            return str(error)
 
         if missing:
             lines.append(f"찾지 못한 캐릭터: {', '.join(missing)}")
@@ -191,7 +226,7 @@ class Processor:
 
     def _basic(self, request, key, head, args, caster):
         if key == '도움말':
-            return self._help()
+            return self._help(request.is_admin)
 
         if is_dice(head):
             try:
@@ -221,7 +256,7 @@ class Processor:
             return render(phrases[int(seed, 16) % len(phrases)], caster, self.rng)
         return None
 
-    def _help(self) -> str:
+    def _help(self, is_admin: bool = False) -> str:
         rows = self.sheets.rows_or_empty('main', HELP)
         lines = []
         if rows:
@@ -229,12 +264,16 @@ class Processor:
                 header_row, columns = header_index(rows, '명령어')
                 for row in rows[header_row + 1:]:
                     command = cell(row, columns['명령어'])
-                    if command.startswith('['):
+                    if command.startswith('[') and not moved_command(command):
                         description = cell(row, columns.get('설명'))
                         lines.append(f'{command} {description}'.strip())
             except LookupError:
                 pass
-        return '\n'.join(['도움말', ''] + (lines or DEFAULT_HELP))
+        lines = lines or list(DEFAULT_HELP)
+        if self.ledger.available:
+            server = self.ledger.settings()
+            lines += server.help + (server.admin_help if is_admin else [])
+        return '\n'.join(['도움말', ''] + lines)
 
     # ------------------------------------------------------------ 상점
 
@@ -245,57 +284,57 @@ class Processor:
             return None
 
         if key == '상점':
-            items = [item for item in game.shop_items(self.sheets) if item.for_sale]
+            items = [item for item in self.ledger.shop_items() if item.for_sale]
             if not items:
                 return '판매 중인 아이템이 없습니다.'
-            return '\n'.join(['상점', ''] + [f'- {item.name} ({self._money(item.price)})' for item in items])
+            shops = list(dict.fromkeys(item.shop for item in items))
+            lines = ['상점', '']
+            for shop in shops:
+                if len(shops) > 1:
+                    lines.append(f'[{shop}]')
+                lines += [f'- {item.name} ({self._money(item.price)})' for item in items if item.shop == shop]
+            return '\n'.join(lines)
 
         if key == '설명':
             if not args or not args[0]:
                 return '형식: [설명/아이템명]'
-            item = game.find_shop_item(self.sheets, args[0])
+            item = self.ledger.find_shop_item(args[0])
             if item is None:
                 return f"'{args[0]}'{josa(args[0], '은', '는')} 상점에 없는 아이템입니다."
             return f'[{item.name}]\n{render(item.description, caster, self.rng)}'
 
-        with self.sheets.write_lock:
-            character = self._character(request.user)
-            if character is None:
-                return self._not_registered()
+        character = self._character(request.user)
+        if character is None:
+            return self._not_registered()
 
-            if key == '가방':
-                return f'{character.name}의 가방\n\n소지금: {self._money(character.money)}\n소지품: {describe_items(character.items)}'
+        if key == '가방':
+            return f'{character.name}의 가방\n\n소지금: {self._money(character.money)}\n소지품: {describe_items(character.items)}'
 
-            if not args or not args[0]:
-                return f'형식: [{head}/아이템명]'
+        if not args or not args[0]:
+            return f'형식: [{head}/아이템명]'
 
-            if key == '구매':
-                item = game.find_shop_item(self.sheets, args[0])
-                if item is None:
-                    return f"'{args[0]}'{josa(args[0], '은', '는')} 상점에 없는 아이템입니다."
-                if not item.for_sale:
-                    return f'{item.name}{josa(item.name, "은", "는")} 구매할 수 없는 아이템입니다.'
-                count = 1
-                if len(args) > 1 and re.fullmatch(r'\d+', args[1]):
-                    count = max(1, int(args[1]))
-                total = item.price * count
-                if character.money < total:
-                    return f'소지금이 부족합니다. (필요: {self._money(total)}, 소지금: {self._money(character.money)})'
-                character.money -= total
-                existing = find_item_key(character.items, item.name) or item.name
-                character.items[existing] = character.items.get(existing, 0) + count
-                self.ledger.save(character, money=True, items=True)
-                self.recorder.record(character.name, character.acct, '구매', f'{item.name} {count}개 (-{self._money(total)})')
-                return f'{item.name} {with_unit(count)}{josa(with_unit(count), "을", "를")} 구매했습니다. (소지금: {self._money(character.money)})'
+        if key == '구매':
+            item = self.ledger.find_shop_item(args[0])
+            if item is None:
+                return f"'{args[0]}'{josa(args[0], '은', '는')} 상점에 없는 아이템입니다."
+            if not item.for_sale:
+                return f'{item.name}{josa(item.name, "은", "는")} 구매할 수 없는 아이템입니다.'
+            count = 1
+            if len(args) > 1 and re.fullmatch(r'\d+', args[1]):
+                count = max(1, int(args[1]))
+            total = item.price * count
+            if character.money < total:
+                return f'소지금이 부족합니다. (필요: {self._money(total)}, 소지금: {self._money(character.money)})'
+            updated = self._apply_one(character, 'purchase', f'{item.name} {count}개', money=-total, items={item.name: count})
+            return f'{item.name} {with_unit(count)}{josa(with_unit(count), "을", "를")} 구매했습니다. (소지금: {self._money(updated.money)})'
 
-            # 소모
-            existing = find_item_key(character.items, args[0])
-            if existing is None or character.items[existing] <= 0:
-                return f"'{args[0]}'{josa(args[0], '을', '를')} 가지고 있지 않습니다."
-            character.items[existing] -= 1
-            self.ledger.save(character, items=True)
-            self.recorder.record(character.name, character.acct, '소모', existing)
-            return f'{existing}{josa(existing, "을", "를")} 소모했습니다. (남은 수량: {character.items[existing]}개)'
+        # 소모
+        existing = find_item_key(character.items, args[0])
+        if existing is None or character.items[existing] <= 0:
+            return f"'{args[0]}'{josa(args[0], '을', '를')} 가지고 있지 않습니다."
+        updated = self._apply_one(character, 'consume', existing, items={existing: -1})
+        left = updated.items.get(existing, 0)
+        return f'{existing}{josa(existing, "을", "를")} 소모했습니다. (남은 수량: {left}개)'
 
     # ------------------------------------------------------------ 스탯
 
@@ -305,46 +344,47 @@ class Processor:
         if not self.ledger.available:
             return None
 
-        with self.sheets.write_lock:
-            character = self._character(request.user)
-            if character is None:
-                return self._not_registered()
+        character = self._character(request.user)
+        if character is None:
+            return self._not_registered()
 
-            if key in ('상태확인', '상태'):
-                lines = [f'{character.name}의 상태', '', f'소지금: {self._money(character.money)}',
-                         f'소지품: {describe_items(character.items)}']
-                lines += [f'{stat}: {value}' for stat, value in character.stats.items() if value != '']
-                return '\n'.join(lines)
-
-            if not args or not args[0]:
-                return '형식: [사용/아이템명]'
-            existing = find_item_key(character.items, args[0])
-            if existing is None or character.items[existing] <= 0:
-                return f"'{args[0]}'{josa(args[0], '을', '를')} 가지고 있지 않습니다."
-
-            item = game.find_shop_item(self.sheets, existing)
-            if item is not None and not item.usable:
-                return f'{existing}{josa(existing, "은", "는")} 사용할 수 없는 아이템입니다.'
-
-            lines = [f'{existing}{josa(existing, "을", "를")} 사용했습니다.']
-            changed_stats = []
-            if item is not None and item.stat and item.value:
-                stat_key = character.stat_key(item.stat)
-                if stat_key is None:
-                    return f"관리 시트에 '{item.stat}' 스탯이 없습니다. 운영진에게 문의해 주세요."
-                try:
-                    delta = amount(item.value, self.rng)
-                except DiceError as error:
-                    return str(error)
-                before = game._to_int(character.stats[stat_key])
-                character.stats[stat_key] = str(before + delta)
-                changed_stats.append(stat_key)
-                lines.append(f'➭ {stat_key} {delta:+d} ({before} → {before + delta})')
-
-            character.items[existing] -= 1
-            self.ledger.save(character, items=True, stats=changed_stats)
-            self.recorder.record(character.name, character.acct, '사용', ' '.join([existing] + [line[2:] for line in lines[1:]]))
+        if key in ('상태확인', '상태'):
+            lines = [f'{character.name}의 상태', '', f'소지금: {self._money(character.money)}',
+                     f'소지품: {describe_items(character.items)}']
+            lines += [f'{stat}: {value}' for stat, value in list(character.stats.items()) + list(character.statuses.items())
+                      if value not in (None, '')]
             return '\n'.join(lines)
+
+        if not args or not args[0]:
+            return '형식: [사용/아이템명]'
+        existing = find_item_key(character.items, args[0])
+        if existing is None or character.items[existing] <= 0:
+            return f"'{args[0]}'{josa(args[0], '을', '를')} 가지고 있지 않습니다."
+
+        item = self.ledger.find_shop_item(existing)
+        if item is not None and not item.usable:
+            return f'{existing}{josa(existing, "은", "는")} 사용할 수 없는 아이템입니다.'
+
+        lines = [f'{existing}{josa(existing, "을", "를")} 사용했습니다.']
+        stats = {}
+        stat_key = None
+        before = 0
+        if item is not None and item.stat and item.value:
+            stat_key = character.stat_key(item.stat)
+            if stat_key is None:
+                return f"'{item.stat}' 스탯이 없습니다. 운영진에게 문의해 주세요."
+            try:
+                delta = amount(item.value, self.rng)
+            except DiceError as error:
+                return str(error)
+            before = int(character.stats[stat_key] or 0)
+            stats[stat_key] = delta
+
+        updated = self._apply_one(character, 'use', existing, items={existing: -1}, stats=stats)
+        if stat_key is not None:
+            after = updated.stats.get(stat_key, before + stats[stat_key])
+            lines.append(f'➭ {stat_key} {stats[stat_key]:+d} ({before} → {after})')
+        return '\n'.join(lines)
 
     # ------------------------------------------------------------ 옵션
 
@@ -363,66 +403,56 @@ class Processor:
         if len(args) < 2 or not args[0] or not args[1]:
             return f'형식: [양도/n{self.config.currency}/캐릭터명] 또는 [양도/아이템명/캐릭터명]'
 
-        with self.sheets.write_lock:
-            giver = self._character(request.user)
-            if giver is None:
-                return self._not_registered()
-            receiver = self.ledger.find_by_name(args[1], fresh=True)
-            if receiver is None:
-                return f"'{args[1]}' 캐릭터를 찾을 수 없습니다."
-            if receiver.row == giver.row:
-                return '자기 자신에게는 양도할 수 없습니다.'
+        giver = self._character(request.user)
+        if giver is None:
+            return self._not_registered()
+        receiver = self.ledger.find_by_name(args[1])
+        if receiver is None:
+            return f"'{args[1]}' 캐릭터를 찾을 수 없습니다."
+        if receiver.acct.lower() == giver.acct.lower():
+            return '자기 자신에게는 양도할 수 없습니다.'
 
-            money_match = re.fullmatch(rf'(\d+)\s*({re.escape(self.config.currency)})?', args[0].replace(',', ''))
-            if money_match:
-                value = int(money_match.group(1))
-                if value <= 0:
-                    return '1 이상만 양도할 수 있습니다.'
-                if giver.money < value:
-                    return f'소지금이 부족합니다. (소지금: {self._money(giver.money)})'
-                giver.money -= value
-                receiver.money += value
-                self.ledger.save(giver, money=True)
-                self.ledger.save(receiver, money=True)
-                self.recorder.record(giver.name, giver.acct, '양도', f'{self._money(value)} → {receiver.name}')
-                return f'{receiver.name}에게 {self._money(value)}{josa(self._money(value), "을", "를")} 양도했습니다. (소지금: {self._money(giver.money)})'
+        money_match = re.fullmatch(rf'(\d+)\s*({re.escape(self.config.currency)})?', args[0].replace(',', ''))
+        if money_match:
+            value = int(money_match.group(1))
+            if value <= 0:
+                return '1 이상만 양도할 수 있습니다.'
+            if giver.money < value:
+                return f'소지금이 부족합니다. (소지금: {self._money(giver.money)})'
+            result = self.ledger.apply([{'acct': giver.acct, 'money': -value}, {'acct': receiver.acct, 'money': value}],
+                                       'transfer', f'{self._money(value)} → {receiver.name}')
+            left = result.get(giver.acct.lower(), giver).money
+            return f'{receiver.name}에게 {self._money(value)}{josa(self._money(value), "을", "를")} 양도했습니다. (소지금: {self._money(left)})'
 
-            wanted = parse_items(args[0])
-            if not wanted:
-                return '양도할 아이템을 적어 주세요.'
-            for name, count in wanted.items():
-                existing = find_item_key(giver.items, name)
-                if existing is None or giver.items[existing] < count:
-                    return f"'{name}'{josa(name, '이', '가')} {count}개 이상 있어야 양도할 수 있습니다."
-            moved = []
-            for name, count in wanted.items():
-                existing = find_item_key(giver.items, name)
-                giver.items[existing] -= count
-                target = find_item_key(receiver.items, existing) or existing
-                receiver.items[target] = receiver.items.get(target, 0) + count
-                moved.append(f'{existing} {count}개')
-            self.ledger.save(giver, items=True)
-            self.ledger.save(receiver, items=True)
-            self.recorder.record(giver.name, giver.acct, '양도', f"{', '.join(moved)} → {receiver.name}")
-            return f"{receiver.name}에게 {', '.join(moved)}{josa(moved[-1], '을', '를')} 양도했습니다."
+        wanted = parse_items(args[0])
+        if not wanted:
+            return '양도할 아이템을 적어 주세요.'
+        moved, take, give = [], {}, {}
+        for name, count in wanted.items():
+            existing = find_item_key(giver.items, name)
+            if existing is None or giver.items[existing] < count:
+                return f"'{name}'{josa(name, '이', '가')} {count}개 이상 있어야 양도할 수 있습니다."
+            take[existing] = -count
+            give[existing] = count
+            moved.append(f'{existing} {count}개')
+        self.ledger.apply([{'acct': giver.acct, 'items': take}, {'acct': receiver.acct, 'items': give}],
+                          'transfer', f"{', '.join(moved)} → {receiver.name}")
+        return f"{receiver.name}에게 {', '.join(moved)}{josa(moved[-1], '을', '를')} 양도했습니다."
 
     def _attendance(self, request):
         if not self.ledger.available:
             return None
-        today = f'{self.clock():%Y-%m-%d}'
-        with self.sheets.write_lock:
-            character = self._character(request.user)
-            if character is None:
-                return self._not_registered()
-            if self.state.get('attendance', character.acct.lower()) == today:
+        character = self._character(request.user)
+        if character is None:
+            return self._not_registered()
+        reward = self._money(self.config.attendance_reward)
+        try:
+            updated = self._apply_one(character, 'attendance', f'+{reward}', money=self.config.attendance_reward, once_per_day=True)
+        except LedgerError as error:
+            if error.code == 'already_done':
                 return '오늘은 이미 출석했습니다. 내일 다시 와 주세요!'
-            character.money += self.config.attendance_reward
-            self.ledger.save(character, money=True)
-            self.state.set('attendance', character.acct.lower(), today)
-            self.recorder.attendance(character.name, character.acct)
-            self.recorder.record(character.name, character.acct, '출석', f'+{self._money(self.config.attendance_reward)}')
-            reward = self._money(self.config.attendance_reward)
-            return f'출석 완료! {reward}{josa(reward, "을", "를")} 받았습니다. (소지금: {self._money(character.money)})'
+            raise
+        return f'출석 완료! {reward}{josa(reward, "을", "를")} 받았습니다. (소지금: {self._money(updated.money)})'
 
     def _randombox(self, request, args):
         rows = self.sheets.rows_or_empty('main', RANDOMBOX)
@@ -457,36 +487,36 @@ class Processor:
             return f"'{args[0]}' 박스를 찾을 수 없습니다."
         box = boxes[box_name]
 
-        with self.sheets.write_lock:
-            character = self._character(request.user)
-            if character is None:
-                return self._not_registered()
+        if not self.ledger.available:
+            return None
+        character = self._character(request.user)
+        if character is None:
+            return self._not_registered()
 
-            owned = find_item_key(character.items, box_name)
-            if owned and character.items[owned] > 0:
-                character.items[owned] -= 1
-                paid = f'{owned} 1개 사용'
-            elif box['price'] is not None:
-                if character.money < box['price']:
-                    return f"소지금이 부족합니다. (필요: {self._money(box['price'])}, 소지금: {self._money(character.money)})"
-                character.money -= box['price']
-                paid = f"{self._money(box['price'])} 사용"
-            else:
-                return f'{box_name}{josa(box_name, "이", "가")} 없습니다.'
+        money, items = 0, {}
+        owned = find_item_key(character.items, box_name)
+        if owned and character.items[owned] > 0:
+            items[owned] = -1
+            paid = f'{owned} 1개 사용'
+        elif box['price'] is not None:
+            if character.money < box['price']:
+                return f"소지금이 부족합니다. (필요: {self._money(box['price'])}, 소지금: {self._money(character.money)})"
+            money = -box['price']
+            paid = f"{self._money(box['price'])} 사용"
+        else:
+            return f'{box_name}{josa(box_name, "이", "가")} 없습니다.'
 
-            candidates = [entry for entry in box['items'] if entry[2] > 0] or box['items']
-            item, count_text, _ = self.rng.choices(candidates, weights=[entry[2] or 1 for entry in candidates])[0]
-            try:
-                count = amount(count_text, self.rng)
-            except DiceError:
-                count = 1
-            if count > 0:
-                existing = find_item_key(character.items, item) or item
-                character.items[existing] = character.items.get(existing, 0) + count
-            self.ledger.save(character, money=True, items=True)
+        candidates = [entry for entry in box['items'] if entry[2] > 0] or box['items']
+        item, count_text, _ = self.rng.choices(candidates, weights=[entry[2] or 1 for entry in candidates])[0]
+        try:
+            count = amount(count_text, self.rng)
+        except DiceError:
+            count = 1
+        if count > 0:
+            items[item] = items.get(item, 0) + count
 
         result = f"➭ '{item}' {count}개 획득" if count > 0 else f'➭ {item}'
-        self.recorder.record(character.name, character.acct, '랜덤박스', f'{box_name} ({paid}) → {result[2:]}')
+        self._apply_one(character, 'randombox', f'{box_name} ({paid}) → {result[2:]}', money=money, items=items)
         return f'{box_name}{josa(box_name, "을", "를")} 열었습니다! ({paid})\n\n{result}'
 
     # ------------------------------------------------------------ 키워드

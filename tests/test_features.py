@@ -3,7 +3,6 @@ import random
 from datetime import datetime, timedelta
 
 from ssbot.config import KST
-from ssbot.game import Ledger
 from ssbot.reservation import ReservationScheduler, parse_visibility, parse_when
 from ssbot.rewards import TootRewards
 from ssbot.sheets import CsvBackend, Sheets
@@ -23,15 +22,16 @@ def test_investigate_requires_entry(bot):
     assert '먼저 [진입/장소명]' in bot('조사/모래밭')
 
 
-def test_enter_and_investigate_applies_effects(bot, sheet_dir):
+def test_enter_and_investigate_applies_effects(bot):
     entered = bot('진입/운동장')
     assert '{' not in entered
     text = bot('조사/모래밭')
     assert text.startswith('[모래밭]')
     assert "➭ '기념주화' 1개 획득" in text and '➭ 체력 -3' in text and '➭ 정신력 -1' in text
-    with (sheet_dir / 'main' / '관리.csv').open(encoding='utf-8') as file:
-        row = next(r for r in csv.reader(file) if r[0] == '엘레나')
-    assert row[4] == '반지: 1, 기념주화: 1' and row[5] == '83' and row[6] == '29'
+    elena = bot.server.find('Elena')
+    assert [(item['name'], item['count']) for item in elena['items']] == [('반지', 1), ('기념주화', 1)]
+    assert elena['stats'] == {'체력': 83, '정신력': 29}
+    assert bot.server.records[-1]['kind'] == 'investigation'
 
 
 def test_closed_place_and_unknown_point(bot):
@@ -90,23 +90,22 @@ def test_reservations_post_once(sheet_dir, tmp_path):
 
 # ------------------------------------------------------------ 툿 수 보상
 
-def test_toot_rewards_high_water_mark(sheet_dir, tmp_path):
-    sheets = Sheets(CsvBackend(sheet_dir), ttl=0)
-    ledger = Ledger(sheets)
-    rewards = TootRewards(sheets, State(tmp_path / 's.json'), ledger, every=10, amount=2)
+def test_toot_rewards_high_water_mark(tmp_path, ledger, server):
+    rewards = TootRewards(State(tmp_path / 's.json'), ledger, every=10, amount=2)
     counts = {'elena': 5}
     lookup = lambda acct: counts.get(acct.lower())
     assert rewards.run_once(lookup) == {}               # 기준만 잡는다
     counts['elena'] = 25
     assert rewards.run_once(lookup) == {'엘레나': 4}    # 10, 20 두 번 넘김
-    assert ledger.find('Elena').money == 16
+    assert server.find('Elena')['money'] == 16
+    assert server.records[-1]['kind'] == 'toot'
     counts['elena'] = 12                                 # 지움
     assert rewards.run_once(lookup) == {}
     counts['elena'] = 29
     assert rewards.run_once(lookup) == {}               # 최고치(25)를 넘지 않았으니 없음
 
 
-# ------------------------------------------------------------ 설정 · 기록 탭
+# ------------------------------------------------------------ 설정 탭 · 서버 재화 규칙
 
 def _set(sheet_dir, item, value):
     path = sheet_dir / 'main' / '설정.csv'
@@ -118,16 +117,12 @@ def _set(sheet_dir, item, value):
         csv.writer(file).writerows(rows)
 
 
-def _records(sheet_dir, name):
-    return list(csv.reader((sheet_dir / 'main' / f'{name}.csv').open(encoding='utf-8')))[1:]
-
-
-def test_settings_tab_overrides(bot, sheet_dir):
-    _set(sheet_dir, '재화 이름', '골드')
+def test_currency_rules_come_from_the_server(bot, server):
+    server.config['currency'] = '골드'
     assert '소지금: 12골드' in bot('가방')
-    _set(sheet_dir, '출석 보상', '0')
+    server.config['attendance_reward'] = 0
     assert '없는 명령어' in bot('출석')
-    _set(sheet_dir, '양도', '미사용')
+    server.config['transfer_enabled'] = False
     assert '없는 명령어' in bot('양도/1/소피아')
 
 
@@ -135,13 +130,3 @@ def test_settings_tab_admins(bot, sheet_dir):
     assert '운영진만' in bot('소지금 추가/1/엘레나', user='Sophia')
     _set(sheet_dir, '운영진', 'Sophia, 다른사람')
     assert '완료' in bot('소지금 추가/1/엘레나', user='Sophia')
-
-
-def test_records_and_attendance_book(bot, sheet_dir):
-    bot('구매/사과')
-    bot('출석')
-    bot('양도/1코인/소피아')
-    kinds = [row[3] for row in _records(sheet_dir, '기록')]
-    assert kinds == ['구매', '출석', '양도']
-    assert _records(sheet_dir, '기록')[0][1:3] == ['엘레나', 'Elena']
-    assert _records(sheet_dir, '출석부') == [['2026-10-11', '12:00', '엘레나', 'Elena']]
