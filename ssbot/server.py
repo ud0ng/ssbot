@@ -130,6 +130,9 @@ class ServerSettings:
     toot_reward_amount: int = 1
     help: List[str] = field(default_factory=list)
     admin_help: List[str] = field(default_factory=list)
+    # 컨텐츠 설정 > 상점에서 바꾼 명령어 이름 ({'buy': '사기', 'stat_change': '변경', ...}) 과 운영진 계정
+    commands: Dict[str, str] = field(default_factory=dict)
+    admins: List[str] = field(default_factory=list)
 
 
 class LedgerError(Exception):
@@ -223,6 +226,8 @@ class ServerLedger:
                 toot_reward_amount=int(data.get('toot_reward_amount') or 0),
                 help=list(data.get('help') or []),
                 admin_help=list(data.get('admin_help') or []),
+                commands={str(key): str(name).strip() for key, name in (data.get('commands') or {}).items() if str(name).strip()},
+                admins=[str(acct).strip().lstrip('@') for acct in data.get('admins') or [] if str(acct).strip()],
             )
         return self._cached('config', load)
 

@@ -42,6 +42,14 @@ DEFAULT_HELP = [
     '[운세] 오늘의 운세를 확인합니다.',
 ]
 
+# 마스토돈 컨텐츠 설정 > 상점에서 이름을 바꿀 수 있는 명령어: 서버 설정 키 → 자동봇이 처리하는 원래 이름(normalize_key)
+COMMAND_KEYS = {
+    'bag': '가방', 'shop': '상점', 'buy': '구매', 'describe': '설명', 'consume': '소모', 'use': '사용',
+    'status': '상태확인', 'transfer': '양도', 'attendance': '출석', 'help': '도움말',
+    'money_add': '소지금추가', 'money_sub': '소지금차감', 'item_add': '아이템추가', 'item_sub': '아이템차감',
+}
+STAT_CHANGE = '변경'   # [힘 변경/+3/캐릭터명] 의 뒷말 (서버 설정 stat_change)
+
 # 마스토돈으로 옮긴 명령어: 시트 도움말에 남아 있어도 빼고 서버 도움말을 붙인다
 MOVED_COMMANDS = {'가방', '상점', '구매', '설명', '소모', '상태확인', '상태', '사용', '양도', '출석',
                   '소지금추가', '소지금차감', '아이템추가', '아이템차감'}
@@ -96,16 +104,44 @@ class Processor:
         self.rng = rng or random.Random()
         self.clock = clock
         self.investigation = Investigation(config, sheets, state, ledger, self.rng, clock)
+        self.aliases = {}          # 바꾼 이름(normalize_key) → 원래 이름
+        self.renamed = set()       # 이름을 바꿔서 더는 받지 않는 원래 이름
+        self.names = {}            # 원래 이름 → 지금 쓰는 이름 (안내 문구용)
+        self.stat_change = STAT_CHANGE
 
     def effective_config(self) -> Config:
-        """시트 설정 탭 + 마스토돈 재화 규칙을 반영한 설정 (바꾸면 다음 명령어부터 적용)."""
+        """시트 설정 탭 + 마스토돈 재화 규칙·명령어 이름·운영진을 반영한 설정 (바꾸면 다음 명령어부터 적용)."""
         config = effective(self.base_config, self.sheets)
         if self.ledger.available:
             server = self.ledger.settings()
             config = replace(config, currency=server.currency, transfer_enabled=server.transfer_enabled,
                              attendance_reward=server.attendance_reward, toot_reward_every=server.toot_reward_every,
-                             toot_reward_amount=server.toot_reward_amount)
+                             toot_reward_amount=server.toot_reward_amount,
+                             admins=list(dict.fromkeys(list(config.admins) + list(server.admins))))
+            self._load_commands(server.commands)
         return config
+
+    def _load_commands(self, commands) -> None:
+        """서버가 준 명령어 이름: 바꾼 이름은 원래 이름으로 처리하고, 바뀐 원래 이름은 받지 않는다."""
+        self.aliases, self.renamed, self.names = {}, set(), {}
+        for setting, original in COMMAND_KEYS.items():
+            name = (commands or {}).get(setting) or original
+            self.names[original] = name
+            custom = normalize_key(name)
+            if custom and custom != original:
+                self.aliases[custom] = original
+                self.renamed.add(original)
+        self.stat_change = (commands or {}).get('stat_change') or STAT_CHANGE
+
+    def _command_key(self, key: str) -> str:
+        if key in self.aliases:
+            return self.aliases[key]
+        if key in self.renamed:
+            return ''   # 예전 이름: 어느 처리기에도 걸리지 않게
+        return key
+
+    def _name(self, original: str) -> str:
+        return self.names.get(original, original)
 
     # ------------------------------------------------------------ 입구
 
@@ -116,6 +152,7 @@ class Processor:
         args = parts[1:]
         self.config = self.effective_config()
         self.investigation.config = self.config
+        key = self._command_key(key)
         if self.config.is_admin(request.user):
             request.is_admin = True
         fallback = request.display_name or request.user
@@ -137,7 +174,8 @@ class Processor:
         if reply is not None:
             return reply
 
-        return Reply(f'[{head}]{josa(head, "은", "는")} 없는 명령어입니다. [도움말]을 확인해 주세요.')
+        help_name = self._name(HELP)
+        return Reply(f'[{head}]{josa(head, "은", "는")} 없는 명령어입니다. [{help_name}]{josa(help_name, "을", "를")} 확인해 주세요.')
 
     # ------------------------------------------------------------ 공통
 
@@ -160,7 +198,8 @@ class Processor:
 
     def _admin(self, request, key, head, args, caster):
         admin_keys = {'캐시리셋', '시트업데이트', '소지금추가', '소지금차감', '아이템추가', '아이템차감'}
-        is_stat_change = key.endswith('변경') and len(key) > 2
+        suffix = normalize_key(self.stat_change)
+        is_stat_change = bool(suffix) and key.endswith(suffix) and len(key) > len(suffix)
         if key not in admin_keys and not is_stat_change:
             return None
         if not request.is_admin:
@@ -204,7 +243,8 @@ class Processor:
                     updated = self._apply_one(character, 'admin', detail, items=deltas) if deltas else character
                     lines.append(f'{character.name}: {describe_items(updated.items)}')
             else:
-                stat = head[:-2].strip()
+                # [힘 변경/..] → '힘' (뒷말은 서버 설정 stat_change, 띄어 쓰지 않아도 된다)
+                stat = re.sub(r'\s*' + r'\s*'.join(map(re.escape, self.stat_change.replace(' ', ''))) + r'\s*$', '', head).strip()
                 if any(character.stat_key(stat) is None for character in targets):
                     if any(normalize_key(name) == normalize_key(stat) for name in targets[0].statuses):
                         return f"'{stat}'{josa(stat, '은', '는')} 스탯으로 계산하는 상태 수치라 바꿀 수 없습니다."

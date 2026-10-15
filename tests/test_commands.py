@@ -134,3 +134,25 @@ def test_admin_commands(bot):
 
 def test_not_registered(bot):
     assert '등록된 캐릭터가 아닙니다' in bot('가방', user='stranger')
+
+
+def test_renamed_commands_from_server(bot):
+    """컨텐츠 설정 > 상점에서 바꾼 이름으로 받고, 바뀐 예전 이름은 받지 않는다."""
+    bot.server.config['commands'] = {'buy': '사기', 'bag': '내 가방', 'help': '명령어', 'stat_change': '조정'}
+    before = character(bot, 'Elena')['money']
+    assert '구매했습니다' in bot('사기/동화책')
+    assert character(bot, 'Elena')['money'] == before - 1
+    assert '엘레나의 가방' in bot('내가방')
+    assert '없는 명령어입니다. [명령어]를 확인해 주세요.' in bot('구매/동화책')
+    assert bot('명령어').startswith('도움말')
+    text = bot('체력 조정/-1/마야', user='manager', admin=True)
+    assert '마야: 체력 91 → 90' in text
+    assert '없는 명령어' in bot('체력 변경/-1/마야', user='manager', admin=True)
+
+
+def test_admins_from_server(bot):
+    """서버의 운영진 계정도 운영진 명령어를 쓸 수 있다 (자동봇 설정의 운영진과 함께)."""
+    assert '운영진만' in bot('소지금 추가/1/마야', user='Grace')
+    bot.server.config['admins'] = ['Grace']
+    assert '마야: +1' in bot('소지금 추가/1/마야', user='Grace')
+    assert '마야: +1' in bot('소지금 추가/1/마야', user='manager')
