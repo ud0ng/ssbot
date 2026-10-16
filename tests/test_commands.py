@@ -11,15 +11,40 @@ def test_first_command():
     assert first_command('그냥 대화') is None
 
 
-def test_help_uses_sheet_lines_and_server_currency_help(bot):
+def test_help_lists_basic_lines_and_topics(bot):
     text = bot('도움말')
     assert text.startswith('도움말\n\n')
     assert '[NdM] M면체 주사위를 N개 굴립니다.' in text
     assert '그 외에도' not in text
-    # 시트의 재화 명령어 줄은 빼고 서버 도움말을 붙인다 (한 번만)
-    assert text.count('[가방]') == 1 and '[출석] 하루 한 번 재화를 받습니다.' in text
-    assert '[소지금 추가' not in text
-    assert '[소지금 추가/10/캐릭터명]' in bot('도움말', user='manager')
+    # 시트의 재화 명령어 줄은 빼고, 상점·컨텐츠 명령어는 분류별 도움말로 안내만
+    assert '[가방]' not in text
+    assert '[상점 도움말]' in text and '[컨텐츠 도움말]' in text
+    assert '[운영진 도움말]' not in text
+    assert '[운영진 도움말]' in bot('도움말', user='manager')
+
+
+def test_topic_help(bot):
+    shop = bot('상점 도움말')
+    assert shop.startswith('상점 도움말\n\n')
+    assert '[가방] 현재 소지금과 소지품을 확인합니다.' in shop and '[출석] 하루 한 번 재화를 받습니다.' in shop
+    assert '[젤리빈] @상대 젤리빈 룰렛을 신청합니다.' in bot('컨텐츠 도움말')
+    assert bot('운영진 도움말') == '운영진만 사용할 수 있는 명령어입니다.'
+    assert '[소지금 추가/10/캐릭터명]' in bot('운영진 도움말', user='manager')
+
+
+def test_help_follows_mastodon_settings(bot, server):
+    server.config.update({
+        'help_command': '안내',
+        'basic_help': ['[NdM] 주사위', '[운세] 오늘의 운세'],
+        'help_topics': [{'key': 'shop', 'command': '가게 안내', 'description': '가게 명령어'},
+                        {'key': 'admin', 'command': '운영 안내', 'description': '운영 명령어', 'admin': True}],
+    })
+    text = bot('안내')
+    assert text.startswith('안내\n\n[NdM] 주사위\n[운세] 오늘의 운세\n')
+    assert '[가게 안내] 가게 명령어' in text and '[운영 안내]' not in text
+    assert bot('가게 안내').startswith('가게 안내\n\n[가방]')
+    assert '[소지금 추가' in bot('운영 안내', user='manager')
+    assert bot('상점 도움말').endswith('[안내]를 확인해 주세요.')
 
 
 def test_moved_command():
@@ -144,7 +169,7 @@ def test_renamed_commands_from_server(bot):
     assert character(bot, 'Elena')['money'] == before - 1
     assert '엘레나의 가방' in bot('내가방')
     assert '없는 명령어입니다. [명령어]를 확인해 주세요.' in bot('구매/동화책')
-    assert bot('명령어').startswith('도움말')
+    assert bot('명령어').startswith('명령어')
     text = bot('체력 조정/-1/마야', user='manager', admin=True)
     assert '마야: 체력 91 → 90' in text
     assert '없는 명령어' in bot('체력 변경/-1/마야', user='manager', admin=True)
@@ -156,3 +181,10 @@ def test_admins_from_server(bot):
     bot.server.config['admins'] = ['Grace']
     assert '마야: +1' in bot('소지금 추가/1/마야', user='Grace')
     assert '마야: +1' in bot('소지금 추가/1/마야', user='manager')
+
+
+def test_closed_shop_refuses_list_and_purchase(bot, server):
+    server.config['shop_open'] = False
+    assert bot('상점') == '지금은 상점이 열려 있지 않습니다.'
+    assert bot('구매/사과') == '지금은 상점이 열려 있지 않습니다.'
+    assert '[가방]' not in bot('가방')

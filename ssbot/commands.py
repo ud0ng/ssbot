@@ -25,7 +25,7 @@ from typing import Callable, List, Optional
 from .config import Config, now_kst
 from .investigation import Investigation
 from .options import effective
-from .server import Character, LedgerError, ServerLedger, find_item_key, parse_items
+from .server import Character, HelpTopic, LedgerError, ServerLedger, find_item_key, parse_items
 from .sheets import Sheets, cell, header_index
 from .state import State
 from .text import DiceError, amount, is_dice, josa, normalize_key, render, roll, split_options
@@ -49,6 +49,13 @@ COMMAND_KEYS = {
     'money_add': '소지금추가', 'money_sub': '소지금차감', 'item_add': '아이템추가', 'item_sub': '아이템차감',
 }
 STAT_CHANGE = '변경'   # [힘 변경/+3/캐릭터명] 의 뒷말 (서버 설정 stat_change)
+
+# 분류별 도움말 기본값 (마스토돈이 help_topics 를 주지 않을 때). 명령어·설명은 마스토돈 컨텐츠 설정 > 도움말에서 바꾼다
+DEFAULT_HELP_TOPICS = [
+    HelpTopic('shop', '상점 도움말', '재화·아이템·상점 명령어를 보여줍니다.'),
+    HelpTopic('content', '컨텐츠 도움말', '대결·마법 수업 등 컨텐츠 명령어를 보여줍니다.'),
+    HelpTopic('admin', '운영진 도움말', '운영진 명령어를 보여줍니다.', admin=True),
+]
 
 # 마스토돈으로 옮긴 명령어: 시트 도움말에 남아 있어도 빼고 서버 도움말을 붙인다
 MOVED_COMMANDS = {'가방', '상점', '구매', '설명', '소모', '상태확인', '상태', '사용', '양도', '출석',
@@ -118,7 +125,8 @@ class Processor:
                              attendance_reward=server.attendance_reward, toot_reward_every=server.toot_reward_every,
                              toot_reward_amount=server.toot_reward_amount,
                              admins=list(dict.fromkeys(list(config.admins) + list(server.admins))))
-            self._load_commands(server.commands)
+            # 도움말 이름은 컨텐츠 설정 > 도움말 (help_command), 나머지는 상점 탭의 명령어 이름
+            self._load_commands({**server.commands, **({'help': server.help_command} if server.help_command else {})})
         return config
 
     def _load_commands(self, commands) -> None:
@@ -265,8 +273,11 @@ class Processor:
     # ------------------------------------------------------------ 기본
 
     def _basic(self, request, key, head, args, caster):
-        if key == '도움말':
+        if key == HELP:
             return self._help(request.is_admin)
+        topic = next((topic for topic in self._help_topics() if normalize_key(topic.command) == key), None)
+        if topic is not None:
+            return self._topic_help(topic, request.is_admin)
 
         if is_dice(head):
             try:
@@ -296,9 +307,19 @@ class Processor:
             return render(phrases[int(seed, 16) % len(phrases)], caster, self.rng)
         return None
 
+    def _help_command(self) -> str:
+        return self._name(HELP)
+
+    def _help_topics(self) -> List[HelpTopic]:
+        if not self.ledger.available:
+            return []
+        return self.ledger.settings().help_topics or list(DEFAULT_HELP_TOPICS)
+
     def _help(self, is_admin: bool = False) -> str:
-        rows = self.sheets.rows_or_empty('main', HELP)
-        lines = []
+        # 맨 위 기본 도움말: 마스토돈 설정 줄, 없으면 시트 도움말, 그것도 없으면 기본 줄
+        server_lines = self.ledger.settings().basic_help if self.ledger.available else []
+        rows = [] if server_lines else self.sheets.rows_or_empty('main', HELP)
+        lines = list(server_lines)
         if rows:
             try:
                 header_row, columns = header_index(rows, '명령어')
@@ -310,10 +331,18 @@ class Processor:
             except LookupError:
                 pass
         lines = lines or list(DEFAULT_HELP)
-        if self.ledger.available:
-            server = self.ledger.settings()
-            lines += server.help + (server.admin_help if is_admin else [])
-        return '\n'.join(['도움말', ''] + lines)
+        # 상점·컨텐츠·운영진 명령어는 분류별 도움말로 나눈다 (줄은 마스토돈 서버가 준다)
+        topics = [f'[{topic.command}] {topic.description}'.strip() for topic in self._help_topics() if is_admin or not topic.admin]
+        if topics:
+            lines += ['', '분류별 도움말'] + topics
+        return '\n'.join([self._help_command(), ''] + lines)
+
+    def _topic_help(self, topic: HelpTopic, is_admin: bool) -> str:
+        if topic.admin and not is_admin:
+            return '운영진만 사용할 수 있는 명령어입니다.'
+        server = self.ledger.settings()
+        lines = {'shop': server.help, 'content': server.content_help, 'admin': server.admin_help}.get(topic.key, [])
+        return '\n'.join([topic.command, ''] + (lines or ['아직 안내할 명령어가 없습니다.']))
 
     # ------------------------------------------------------------ 상점
 
@@ -322,6 +351,10 @@ class Processor:
             return None
         if not self.ledger.available:
             return None
+
+        # 상점 해금이 꺼져 있으면 (마스토돈 컨텐츠 설정 > 상점) 목록·구매만 막는다. 가방·설명·소모는 그대로
+        if key in ('상점', '구매') and not self.ledger.settings().shop_open:
+            return '지금은 상점이 열려 있지 않습니다.'
 
         if key == '상점':
             items = [item for item in self.ledger.shop_items() if item.for_sale]
