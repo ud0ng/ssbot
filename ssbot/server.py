@@ -123,7 +123,7 @@ class ShopItem:
 
 @dataclass
 class HelpTopic:
-    """분류별 도움말 하나 (마스토돈 컨텐츠 설정 > 도움말). key: shop / content / admin"""
+    """분류별 도움말 하나 (마스토돈 컨텐츠 설정 > 도움말 > 상점봇). key: shop / admin"""
     key: str
     command: str
     description: str = ''
@@ -140,8 +140,7 @@ class ServerSettings:
     toot_reward_amount: int = 1
     help: List[str] = field(default_factory=list)          # [상점 도움말]
     admin_help: List[str] = field(default_factory=list)    # [운영진 도움말]
-    content_help: List[str] = field(default_factory=list)  # [컨텐츠 도움말] (시스템 계정 명령어)
-    basic_help: List[str] = field(default_factory=list)    # [도움말] 맨 위 (비면 시트 도움말)
+    basic_help: List[str] = field(default_factory=list)    # [도움말] 맨 위 (비면 기본 줄)
     help_command: str = ''              # 컨텐츠 설정 > 도움말의 [도움말] 이름 (없으면 commands['help'])
     help_topics: List[HelpTopic] = field(default_factory=list)
     # 컨텐츠 설정 > 상점에서 바꾼 명령어 이름 ({'buy': '사기', 'stat_change': '변경', ...}) 과 운영진 계정
@@ -243,7 +242,6 @@ class ServerLedger:
                 admin_help=list(data.get('admin_help') or []),
                 commands={str(key): str(name).strip() for key, name in (data.get('commands') or {}).items() if str(name).strip()},
                 admins=[str(acct).strip().lstrip('@') for acct in data.get('admins') or [] if str(acct).strip()],
-                content_help=list(data.get('content_help') or []),
                 basic_help=list(data.get('basic_help') or []),
                 help_command=str(data.get('help_command') or '').strip(),
                 help_topics=[HelpTopic(key=str(topic.get('key') or ''), command=str(topic.get('command') or ''),

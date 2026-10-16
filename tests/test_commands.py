@@ -1,4 +1,4 @@
-from ssbot.commands import first_command, moved_command
+from ssbot.commands import first_command
 
 
 def character(bot, acct):
@@ -16,9 +16,9 @@ def test_help_lists_basic_lines_and_topics(bot):
     assert text.startswith('도움말\n\n')
     assert '[NdM] M면체 주사위를 N개 굴립니다.' in text
     assert '그 외에도' not in text
-    # 시트의 재화 명령어 줄은 빼고, 상점·컨텐츠 명령어는 분류별 도움말로 안내만
+    # 상점·운영진 명령어는 분류별 도움말로 안내만 (컨텐츠 도움말은 시스템봇이 답한다)
     assert '[가방]' not in text
-    assert '[상점 도움말]' in text and '[컨텐츠 도움말]' in text
+    assert '[상점 도움말]' in text and '[컨텐츠 도움말]' not in text
     assert '[운영진 도움말]' not in text
     assert '[운영진 도움말]' in bot('도움말', user='manager')
 
@@ -27,7 +27,6 @@ def test_topic_help(bot):
     shop = bot('상점 도움말')
     assert shop.startswith('상점 도움말\n\n')
     assert '[가방] 현재 소지금과 소지품을 확인합니다.' in shop and '[출석] 하루 한 번 재화를 받습니다.' in shop
-    assert '[젤리빈] @상대 젤리빈 룰렛을 신청합니다.' in bot('컨텐츠 도움말')
     assert bot('운영진 도움말') == '운영진만 사용할 수 있는 명령어입니다.'
     assert '[소지금 추가/10/캐릭터명]' in bot('운영진 도움말', user='manager')
 
@@ -45,11 +44,6 @@ def test_help_follows_mastodon_settings(bot, server):
     assert bot('가게 안내').startswith('가게 안내\n\n[가방]')
     assert '[소지금 추가' in bot('운영 안내', user='manager')
     assert bot('상점 도움말').endswith('[안내]를 확인해 주세요.')
-
-
-def test_moved_command():
-    assert all(moved_command(line) for line in ['[가방]', '[구매/아이템명]', '[상태 확인]', '[체력 변경/+3/겐지]'])
-    assert not any(moved_command(line) for line in ['[운세]', '[NdM]', '[랜덤/A, B]', '', '설명'])
 
 
 def test_dice_and_random(bot):

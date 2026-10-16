@@ -53,14 +53,8 @@ STAT_CHANGE = '변경'   # [힘 변경/+3/캐릭터명] 의 뒷말 (서버 설�
 # 분류별 도움말 기본값 (마스토돈이 help_topics 를 주지 않을 때). 명령어·설명은 마스토돈 컨텐츠 설정 > 도움말에서 바꾼다
 DEFAULT_HELP_TOPICS = [
     HelpTopic('shop', '상점 도움말', '재화·아이템·상점 명령어를 보여줍니다.'),
-    HelpTopic('content', '컨텐츠 도움말', '대결·마법 수업 등 컨텐츠 명령어를 보여줍니다.'),
     HelpTopic('admin', '운영진 도움말', '운영진 명령어를 보여줍니다.', admin=True),
 ]
-
-# 마스토돈으로 옮긴 명령어: 시트 도움말에 남아 있어도 빼고 서버 도움말을 붙인다
-MOVED_COMMANDS = {'가방', '상점', '구매', '설명', '소모', '상태확인', '상태', '사용', '양도', '출석',
-                  '소지금추가', '소지금차감', '아이템추가', '아이템차감'}
-
 
 @dataclass
 class Request:
@@ -80,15 +74,6 @@ def first_command(text: str) -> Optional[str]:
     """툿 본문에서 첫 번째 [대괄호] 내용을 꺼낸다."""
     match = re.search(r'\[([^\[\]]+)\]', text or '')
     return match.group(1).strip() if match else None
-
-
-def moved_command(line: str) -> bool:
-    """도움말 줄이 마스토돈으로 옮긴 명령어인가 ('[가방]', '[구매/아이템명]', '[힘 변경/+3/이름]')."""
-    match = re.match(r'\s*\[([^\]/]+)', line or '')
-    if not match:
-        return False
-    head = normalize_key(match.group(1))
-    return head in MOVED_COMMANDS or (head.endswith('변경') and len(head) > 2)
 
 
 def with_unit(count: int) -> str:
@@ -316,22 +301,10 @@ class Processor:
         return self.ledger.settings().help_topics or list(DEFAULT_HELP_TOPICS)
 
     def _help(self, is_admin: bool = False) -> str:
-        # 맨 위 기본 도움말: 마스토돈 설정 줄, 없으면 시트 도움말, 그것도 없으면 기본 줄
+        # 맨 위 기본 도움말: 마스토돈 컨텐츠 설정 > 도움말 > 상점봇 (시트는 읽지 않는다), 서버가 없으면 기본 줄
         server_lines = self.ledger.settings().basic_help if self.ledger.available else []
-        rows = [] if server_lines else self.sheets.rows_or_empty('main', HELP)
-        lines = list(server_lines)
-        if rows:
-            try:
-                header_row, columns = header_index(rows, '명령어')
-                for row in rows[header_row + 1:]:
-                    command = cell(row, columns['명령어'])
-                    if command.startswith('[') and not moved_command(command):
-                        description = cell(row, columns.get('설명'))
-                        lines.append(f'{command} {description}'.strip())
-            except LookupError:
-                pass
-        lines = lines or list(DEFAULT_HELP)
-        # 상점·컨텐츠·운영진 명령어는 분류별 도움말로 나눈다 (줄은 마스토돈 서버가 준다)
+        lines = list(server_lines) or list(DEFAULT_HELP)
+        # 상점·운영진 명령어는 분류별 도움말로 나눈다 (줄은 마스토돈 서버가 준다). 컨텐츠 도움말은 시스템봇이 답한다
         topics = [f'[{topic.command}] {topic.description}'.strip() for topic in self._help_topics() if is_admin or not topic.admin]
         if topics:
             lines += ['', '분류별 도움말'] + topics
@@ -341,7 +314,7 @@ class Processor:
         if topic.admin and not is_admin:
             return '운영진만 사용할 수 있는 명령어입니다.'
         server = self.ledger.settings()
-        lines = {'shop': server.help, 'content': server.content_help, 'admin': server.admin_help}.get(topic.key, [])
+        lines = {'shop': server.help, 'admin': server.admin_help}.get(topic.key, [])
         return '\n'.join([topic.command, ''] + (lines or ['아직 안내할 명령어가 없습니다.']))
 
     # ------------------------------------------------------------ 상점

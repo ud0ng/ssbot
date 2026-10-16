@@ -25,7 +25,6 @@ class FakeServer:
             'currency': '코인', 'transfer_enabled': True, 'attendance_reward': 1, 'toot_reward_every': 0, 'toot_reward_amount': 1,
             'help': ['[가방] 현재 소지금과 소지품을 확인합니다.', '[출석] 하루 한 번 재화를 받습니다.'],
             'admin_help': ['[소지금 추가/10/캐릭터명] 소지금을 바꿉니다.'],
-            'content_help': ['컨텐츠 명령어는 @system에게 멘션으로 보냅니다.', '[젤리빈] @상대 젤리빈 룰렛을 신청합니다.'],
         }
         self.characters = [
             _character('manager', '운영자', 17, [('바나나', 2), ('사과', 1)], 90, 100),
