@@ -40,6 +40,7 @@ class FakeServer:
             {'name': '사과', 'price': 1, 'description': '아삭아삭!', 'usable': True, 'stat': '체력', 'value': '1d10'},
             {'name': '바나나', 'price': 1, 'description': '부드럽고 달콤하고...', 'usable': True, 'stat': '정신력', 'value': '-(1d6+3)'},
             {'name': '아몬드', 'price': None, 'description': '사실은 청산가리입니다.', 'usable': True, 'stat': '정신력', 'value': '-20'},
+            {'name': '축복 부적', 'price': None, 'description': '', 'usable': True, 'use_target': 'character', 'stat': '', 'value': ''},
             {'name': '파란 꽃병', 'price': 10, 'description': '꽃을 꽂아둘 수 있습니다.', 'usable': False, 'stat': '', 'value': ''},
         ]}]
         self.records = []
@@ -69,8 +70,21 @@ class FakeServer:
 
     # ---- 바꾸기
 
+    def _use(self, json):
+        """서버 Game::ItemUse::Runner 흉내: 캐릭터 대상 아이템은 대상이 있어야 하고 1개 소모."""
+        if not json.get('target'):
+            raise LedgerError('use_failed', '아이템을 쓸 캐릭터를 골라 주세요.')
+        giver = self.find(json['acct'])
+        entry = next((item for item in giver['items'] if _key(item['name']) == _key(json['name'])), None)
+        entry['count'] -= 1
+        giver['items'] = [item for item in giver['items'] if item['count'] > 0]
+        return {'message': f"{json['target']}에게 {json['name']}을 사용했습니다."}
+
+
     def post(self, path, json):
         self.calls.append(('POST', path))
+        if path == 'items/use':
+            return self._use(json)
         assert path == 'characters/apply'
         kind = json['kind']
         working = copy.deepcopy(self.characters)

@@ -104,6 +104,13 @@ def test_use_unusable(bot):
     assert '사용할 수 없는' in bot('사용/파란 꽃병')
 
 
+def test_use_character_item_goes_to_server_rules(bot):
+    bot('아이템 추가/축복 부적: 1/엘레나', user='manager', admin=True)
+    assert '캐릭터를 골라' in bot('사용/축복 부적')
+    assert '소피아에게 축복 부적을 사용했습니다' in bot('사용/축복 부적/소피아')
+    assert '축복 부적' not in character(bot, 'Elena')['items']
+
+
 def test_consume_does_not_change_stats(bot):
     assert '소모했습니다' in bot('소모/반지')
     assert character(bot, 'Elena')['stats']['정신력'] == 30

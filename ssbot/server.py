@@ -114,6 +114,7 @@ class ShopItem:
     stat: str = ''
     value: str = ''
     usable: bool = True
+    use_target: str = 'stat'   # stat(본인 스탯) / character(태그한 캐릭터) / special(신고·기숙사 점수·운영진 DM·호울러)
     shop: str = ''
 
     @property
@@ -297,6 +298,13 @@ class ServerLedger:
         updated = [Character.from_json(row) for row in result.get('characters') or []]
         return {character.acct.lower(): character for character in updated}
 
+    def use_item(self, acct: str, name: str, target: str = '', house: str = '', text: str = '') -> str:
+        """캐릭터·특수 아이템 [사용]: 웹 인벤토리와 같은 규칙으로 서버가 처리하고 안내 문장을 돌려준다."""
+        result = self.api.post('items/use', {'acct': acct, 'name': name, 'target': target, 'house': house, 'text': text}) or {}
+        with self._lock:
+            self._cache.pop('characters', None)
+        return result.get('message') or ''
+
     # ---- 상점
 
     def shop_items(self) -> List[ShopItem]:
@@ -306,7 +314,8 @@ class ServerLedger:
                 for item in shop.get('items') or []:
                     items.append(ShopItem(name=item['name'], price=item.get('price'), description=item.get('description') or '',
                                           stat=item.get('stat') or '', value=item.get('value') or '',
-                                          usable=bool(item.get('usable', True)), shop=shop.get('name') or ''))
+                                          usable=bool(item.get('usable', True)), use_target=item.get('use_target') or 'stat',
+                                          shop=shop.get('name') or ''))
             return items
         return self._cached('shops', load)
 

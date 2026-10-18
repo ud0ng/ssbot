@@ -411,6 +411,13 @@ class Processor:
         if item is not None and not item.usable:
             return f'{existing}{josa(existing, "은", "는")} 사용할 수 없는 아이템입니다.'
 
+        # 캐릭터에게 쓰거나 특수 효과가 있는 아이템은 웹 인벤토리와 같은 규칙으로 서버가 처리한다
+        # [사용/아이템/캐릭터명(또는 랜덤)]  [사용/아이템/기숙사 이름]  (호울러는 시스템 계정에 DM)
+        if item is not None and item.use_target in ('character', 'special'):
+            extra = args[1] if len(args) > 1 else ''
+            target = 'random' if normalize_key(extra) in ('랜덤', 'random') else extra
+            return self.ledger.use_item(request.user, existing, target=target, house=extra, text='/'.join(args[1:]))
+
         lines = [f'{existing}{josa(existing, "을", "를")} 사용했습니다.']
         stats = {}
         stat_key = None
