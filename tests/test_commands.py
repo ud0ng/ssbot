@@ -111,8 +111,8 @@ def test_use_character_item_goes_to_server_rules(bot):
     assert '축복 부적' not in character(bot, 'Elena')['items']
 
 
-def test_consume_does_not_change_stats(bot):
-    assert '소모했습니다' in bot('소모/반지')
+def test_discard_does_not_change_stats(bot):
+    assert '버렸습니다' in bot('버리기/반지')
     assert character(bot, 'Elena')['stats']['정신력'] == 30
 
 

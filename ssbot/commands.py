@@ -3,7 +3,7 @@
 처리 순서
   1. 운영진 명령어      [캐시 리셋] [소지금 추가/차감] [아이템 추가/차감] [OO 변경]
   2. 기본               [도움말] [NdM] [랜덤/A, B] [운세]
-  3. 상점               [가방] [상점] [구매/템] [설명/템] [소모/템]
+  3. 상점               [가방] [상점] [구매/템] [설명/템] [버리기/템]
   4. 스탯               [상태 확인] [사용/템]
   5. 옵션               [양도/..] [출석] [랜덤박스/박스]
   6. 조사               [장소 목록] [진입/장소] [조사/포인트]
@@ -44,7 +44,7 @@ DEFAULT_HELP = [
 
 # 마스토돈 컨텐츠 설정 > 상점에서 이름을 바꿀 수 있는 명령어: 서버 설정 키 → 자동봇이 처리하는 원래 이름(normalize_key)
 COMMAND_KEYS = {
-    'bag': '가방', 'shop': '상점', 'buy': '구매', 'describe': '설명', 'consume': '소모', 'use': '사용',
+    'bag': '가방', 'shop': '상점', 'buy': '구매', 'describe': '설명', 'discard': '버리기', 'use': '사용',
     'status': '상태확인', 'transfer': '양도', 'attendance': '출석', 'help': '도움말',
     'money_add': '소지금추가', 'money_sub': '소지금차감', 'item_add': '아이템추가', 'item_sub': '아이템차감',
 }
@@ -320,12 +320,12 @@ class Processor:
     # ------------------------------------------------------------ 상점
 
     def _shop(self, request, key, head, args, caster):
-        if key not in ('가방', '상점', '구매', '설명', '소모'):
+        if key not in ('가방', '상점', '구매', '설명', '버리기'):
             return None
         if not self.ledger.available:
             return None
 
-        # 상점 해금이 꺼져 있으면 (마스토돈 컨텐츠 설정 > 상점) 목록·구매만 막는다. 가방·설명·소모는 그대로
+        # 상점 해금이 꺼져 있으면 (마스토돈 컨텐츠 설정 > 상점) 목록·구매만 막는다. 가방·설명·버리기는 그대로
         if key in ('상점', '구매') and not self.ledger.settings().shop_open:
             return '지금은 상점이 열려 있지 않습니다.'
 
@@ -374,13 +374,13 @@ class Processor:
             updated = self._apply_one(character, 'purchase', f'{item.name} {count}개', money=-total, items={item.name: count})
             return f'{item.name} {with_unit(count)}{josa(with_unit(count), "을", "를")} 구매했습니다. (소지금: {self._money(updated.money)})'
 
-        # 소모
+        # 버리기: 효과 없이 1개를 없앤다
         existing = find_item_key(character.items, args[0])
         if existing is None or character.items[existing] <= 0:
             return f"'{args[0]}'{josa(args[0], '을', '를')} 가지고 있지 않습니다."
         updated = self._apply_one(character, 'consume', existing, items={existing: -1})
         left = updated.items.get(existing, 0)
-        return f'{existing}{josa(existing, "을", "를")} 소모했습니다. (남은 수량: {left}개)'
+        return f'{existing}{josa(existing, "을", "를")} 버렸습니다. (남은 수량: {left}개)'
 
     # ------------------------------------------------------------ 스탯
 
