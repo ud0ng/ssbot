@@ -99,6 +99,12 @@ def test_use_applies_stat(bot):
     assert elena['stats']['정신력'] == 40 and elena['items'] == {}
 
 
+def test_use_permanent_item_stays(bot):
+    bot('아이템 추가/나침반: 1/엘레나', user='manager', admin=True)
+    assert '나침반을 사용했습니다' in bot('사용/나침반')
+    assert character(bot, 'Elena')['items']['나침반'] == 1
+
+
 def test_use_unusable(bot):
     bot('아이템 추가/파란 꽃병: 1/엘레나', user='manager', admin=True)
     assert '사용할 수 없는' in bot('사용/파란 꽃병')

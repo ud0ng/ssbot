@@ -114,6 +114,7 @@ class ShopItem:
     stat: str = ''
     value: str = ''
     usable: bool = True
+    permanent: bool = False    # [영구] 아이템: [사용] 해도 사라지지 않음
     use_target: str = 'stat'   # stat(본인 스탯) / character(태그한 캐릭터) / special(신고·기숙사 점수·운영진 DM·호울러)
     shop: str = ''
 
@@ -314,7 +315,7 @@ class ServerLedger:
                 for item in shop.get('items') or []:
                     items.append(ShopItem(name=item['name'], price=item.get('price'), description=item.get('description') or '',
                                           stat=item.get('stat') or '', value=item.get('value') or '',
-                                          usable=bool(item.get('usable', True)), use_target=item.get('use_target') or 'stat',
+                                          usable=bool(item.get('usable', True)), permanent=bool(item.get('permanent', False)), use_target=item.get('use_target') or 'stat',
                                           shop=shop.get('name') or ''))
             return items
         return self._cached('shops', load)

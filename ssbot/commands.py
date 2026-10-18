@@ -433,7 +433,9 @@ class Processor:
             before = int(character.stats[stat_key] or 0)
             stats[stat_key] = delta
 
-        updated = self._apply_one(character, 'use', existing, items={existing: -1}, stats=stats)
+        # [영구] 아이템은 사용해도 사라지지 않고, 아니면 1개 없어진다
+        used = {} if item is not None and item.permanent else {existing: -1}
+        updated = self._apply_one(character, 'use', existing, items=used, stats=stats)
         if stat_key is not None:
             after = updated.stats.get(stat_key, before + stats[stat_key])
             lines.append(f'➭ {stat_key} {stats[stat_key]:+d} ({before} → {after})')

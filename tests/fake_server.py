@@ -35,12 +35,13 @@ class FakeServer:
             _character('Grace', '그레이스', 15, [], 84, 59),
         ]
         self.shops = [{'name': '매점', 'description': '', 'items': [
-            {'name': '반지', 'price': 3, 'description': '노란색 보석이 박힌 은색 반지다.', 'usable': True, 'stat': '정신력', 'value': '10'},
+            {'name': '반지', 'price': 3, 'description': '노란색 보석이 박힌 은색 반지다.', 'usable': True, 'permanent': False, 'stat': '정신력', 'value': '10'},
             {'name': '동화책', 'price': 1, 'description': '아이들이 읽을 법한 귀여운 동화책이다.', 'usable': True, 'stat': '체력', 'value': '5'},
             {'name': '사과', 'price': 1, 'description': '아삭아삭!', 'usable': True, 'stat': '체력', 'value': '1d10'},
             {'name': '바나나', 'price': 1, 'description': '부드럽고 달콤하고...', 'usable': True, 'stat': '정신력', 'value': '-(1d6+3)'},
             {'name': '아몬드', 'price': None, 'description': '사실은 청산가리입니다.', 'usable': True, 'stat': '정신력', 'value': '-20'},
             {'name': '축복 부적', 'price': None, 'description': '', 'usable': True, 'use_target': 'character', 'stat': '', 'value': ''},
+            {'name': '나침반', 'price': 2, 'description': '', 'usable': True, 'permanent': True, 'stat': '정신력', 'value': '1'},
             {'name': '파란 꽃병', 'price': 10, 'description': '꽃을 꽂아둘 수 있습니다.', 'usable': False, 'stat': '', 'value': ''},
         ]}]
         self.records = []
