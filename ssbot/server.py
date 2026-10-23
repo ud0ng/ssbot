@@ -21,7 +21,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import requests
 
@@ -265,6 +265,23 @@ class ServerLedger:
         target = normalize_key(name)
         return next((c for c in self.characters(fresh) if normalize_key(c.name) == target or acct_matches(c.acct, name)), None)
 
+    def search(self, name: str, fresh: bool = False) -> List[Character]:
+        """캐릭터 이름 또는 계정 아이디로 찾는다. 아이디·이름이 정확히 같은 캐릭터가 있으면 그쪽만, 없으면 이름이 그 말로 시작하는
+        캐릭터, 그다음 이름에 그 말이 들어 있는 캐릭터 (예: '에이비 시디' 는 '에이비' 만 써도 찾는다). 여럿이면 여럿 다 돌려준다."""
+        characters = self.characters(fresh)
+        target = normalize_key(name.lstrip('@＠'))
+        if not target:
+            return []
+        for matches in (
+            [c for c in characters if acct_matches(c.acct, name.lstrip('＠'))],
+            [c for c in characters if normalize_key(c.name) == target],
+            [c for c in characters if normalize_key(c.name).startswith(target)],
+            [c for c in characters if target in normalize_key(c.name)],
+        ):
+            if matches:
+                return matches
+        return []
+
     def targets(self, names: str, fresh: bool = True) -> tuple[List[Character], List[str]]:
         """'겐지, 디바' 또는 '전원' → (찾은 캐릭터, 못 찾은 이름)"""
         characters = self.characters(fresh)
@@ -273,8 +290,8 @@ class ServerLedger:
         found, missing = [], []
         for name in [part.strip() for part in re.split(r'[,，]', names or '') if part.strip()]:
             target = normalize_key(name)
-            match = next((c for c in characters if normalize_key(c.name) == target or acct_matches(c.acct, name)), None)
-            (found.append(match) if match else missing.append(name))
+            matches = self.search(name)
+            (found.append(matches[0]) if len(matches) == 1 else missing.append(name if not matches else f"{name}(여럿: {', '.join(c.name for c in matches)})"))
         return found, missing
 
     def display_name(self, user: str, fallback: str = '') -> str:
@@ -299,12 +316,13 @@ class ServerLedger:
         updated = [Character.from_json(row) for row in result.get('characters') or []]
         return {character.acct.lower(): character for character in updated}
 
-    def use_item(self, acct: str, name: str, target: str = '', house: str = '', text: str = '') -> str:
-        """캐릭터·특수 아이템 [사용]: 웹 인벤토리와 같은 규칙으로 서버가 처리하고 안내 문장을 돌려준다."""
-        result = self.api.post('items/use', {'acct': acct, 'name': name, 'target': target, 'house': house, 'text': text}) or {}
+    def use_item(self, acct: str, name: str, args: Optional[List[str]] = None) -> Tuple[str, List[str]]:
+        """아이템 [사용]: 효과(스탯·재화·누적 수치·효과 등)는 웹 인벤토리와 같은 규칙으로 서버가 처리한다.
+        args 는 [사용/아이템/…] 뒤에 붙은 말들 (@상대·캐릭터 이름·소속 이름). (안내 문장, 답글에 태그할 상대 아이디들) 을 돌려준다."""
+        result = self.api.post('items/use', {'acct': acct, 'name': name, 'args': list(args or [])}) or {}
         with self._lock:
             self._cache.pop('characters', None)
-        return result.get('message') or ''
+        return result.get('message') or '', [str(acct) for acct in result.get('notify') or []]
 
     # ---- 상점
 

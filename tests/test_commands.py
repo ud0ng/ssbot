@@ -92,29 +92,19 @@ def test_buy_not_for_sale_and_too_expensive(bot):
     assert '소지금이 부족합니다' in bot('구매/파란 꽃병/2')
 
 
-def test_use_applies_stat(bot):
-    text = bot('사용/반지')
-    assert '➭ 정신력 +10 (30 → 40)' in text
-    elena = character(bot, 'Elena')
-    assert elena['stats']['정신력'] == 40 and elena['items'] == {}
-
-
-def test_use_permanent_item_stays(bot):
-    bot('아이템 추가/나침반: 1/엘레나', user='manager', admin=True)
-    assert '나침반을 사용했습니다' in bot('사용/나침반')
-    assert character(bot, 'Elena')['items']['나침반'] == 1
-
-
 def test_use_unusable(bot):
     bot('아이템 추가/파란 꽃병: 1/엘레나', user='manager', admin=True)
     assert '사용할 수 없는' in bot('사용/파란 꽃병')
 
 
-def test_use_character_item_goes_to_server_rules(bot):
+def test_use_goes_to_the_server_and_tags_the_target(bot):
+    """효과(스탯·재화·누적 수치·효과)는 서버가 처리한다. [사용/아이템/@상대] 의 상대는 답글 앞에 태그해 알린다."""
     bot('아이템 추가/축복 부적: 1/엘레나', user='manager', admin=True)
     assert '캐릭터를 골라' in bot('사용/축복 부적')
-    assert '소피아에게 축복 부적을 사용했습니다' in bot('사용/축복 부적/소피아')
+    text = bot('사용/축복 부적/@Sophia')
+    assert text.startswith('@Sophia ') and 'Sophia에게 축복 부적을 사용했습니다' in text
     assert '축복 부적' not in character(bot, 'Elena')['items']
+    assert ('POST', 'items/use') in bot.server.calls
 
 
 def test_discard_does_not_change_stats(bot):
@@ -195,3 +185,10 @@ def test_closed_shop_refuses_list_and_purchase(bot, server):
     assert bot('상점') == '지금은 상점이 열려 있지 않습니다.'
     assert bot('구매/사과') == '지금은 상점이 열려 있지 않습니다.'
     assert '[가방]' not in bot('가방')
+
+
+def test_transfer_finds_the_character_by_the_first_part_of_the_name(bot):
+    """'소피아' 를 '소피' 만 써도 찾는다 (하나로 정해질 때만, 여럿이면 다시 물어본다)."""
+    assert '소피아에게 5코인을 양도했습니다' in bot('양도/5코인/소피')
+    assert character(bot, 'Sophia')['money'] == 6
+    assert '찾을 수 없습니다' in bot('양도/1/없는이름')

@@ -411,35 +411,12 @@ class Processor:
         if item is not None and not item.usable:
             return f'{existing}{josa(existing, "은", "는")} 사용할 수 없는 아이템입니다.'
 
-        # 캐릭터에게 쓰거나 특수 효과가 있는 아이템은 웹 인벤토리와 같은 규칙으로 서버가 처리한다
-        # [사용/아이템/캐릭터명(또는 랜덤)]  [사용/아이템/기숙사 이름]  (호울러는 시스템 계정에 DM)
-        if item is not None and item.use_target in ('character', 'special'):
-            extra = args[1] if len(args) > 1 else ''
-            target = 'random' if normalize_key(extra) in ('랜덤', 'random') else extra
-            return self.ledger.use_item(request.user, existing, target=target, house=extra, text='/'.join(args[1:]))
-
-        lines = [f'{existing}{josa(existing, "을", "를")} 사용했습니다.']
-        stats = {}
-        stat_key = None
-        before = 0
-        if item is not None and item.stat and item.value:
-            stat_key = character.stat_key(item.stat)
-            if stat_key is None:
-                return f"'{item.stat}' 스탯이 없습니다. 운영진에게 문의해 주세요."
-            try:
-                delta = amount(item.value, self.rng)
-            except DiceError as error:
-                return str(error)
-            before = int(character.stats[stat_key] or 0)
-            stats[stat_key] = delta
-
-        # [영구] 아이템은 사용해도 사라지지 않고, 아니면 1개 없어진다
-        used = {} if item is not None and item.permanent else {existing: -1}
-        updated = self._apply_one(character, 'use', existing, items=used, stats=stats)
-        if stat_key is not None:
-            after = updated.stats.get(stat_key, before + stats[stat_key])
-            lines.append(f'➭ {stat_key} {stats[stat_key]:+d} ({before} → {after})')
-        return '\n'.join(lines)
+        # 효과는 모두 서버가 웹 인벤토리와 같은 규칙으로 처리한다 (상점 설정 > 아이템 효과)
+        # [사용/아이템]  [사용/아이템/@상대]  [사용/아이템/소속 이름]  (소문내기는 시스템 계정에 DM)
+        message, notify = self.ledger.use_item(request.user, existing, args=args[1:])
+        # [사용/아이템/@상대] 의 @상대 는 마스토돈이 멘션으로 보지 않아서, 답글 앞에 태그해 상대에게 알린다
+        tags = ' '.join(f'@{acct}' for acct in notify)
+        return f'{tags} {message}'.strip()
 
     # ------------------------------------------------------------ 옵션
 
@@ -461,9 +438,12 @@ class Processor:
         giver = self._character(request.user)
         if giver is None:
             return self._not_registered()
-        receiver = self.ledger.find_by_name(args[1])
-        if receiver is None:
+        matches = self.ledger.search(args[1])
+        if not matches:
             return f"'{args[1]}' 캐릭터를 찾을 수 없습니다."
+        if len(matches) > 1:
+            return f"'{args[1]}'에 해당하는 캐릭터가 여럿입니다: {', '.join(c.name for c in matches)}. 더 자세히 적어 주세요."
+        receiver = matches[0]
         if receiver.acct.lower() == giver.acct.lower():
             return '자기 자신에게는 양도할 수 없습니다.'
 

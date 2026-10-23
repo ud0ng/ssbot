@@ -72,14 +72,16 @@ class FakeServer:
     # ---- 바꾸기
 
     def _use(self, json):
-        """서버 Game::ItemUse::Runner 흉내: 캐릭터 대상 아이템은 대상이 있어야 하고 1개 소모."""
-        if not json.get('target'):
+        """서버 Game::ItemUse::Runner 흉내: 대상(@아이디)이 있어야 하고 1개 소모, 대상을 notify 로 돌려준다."""
+        target = next((arg for arg in json.get('args') or [] if arg), '')
+        if not target:
             raise LedgerError('use_failed', '아이템을 쓸 캐릭터를 골라 주세요.')
         giver = self.find(json['acct'])
         entry = next((item for item in giver['items'] if _key(item['name']) == _key(json['name'])), None)
         entry['count'] -= 1
         giver['items'] = [item for item in giver['items'] if item['count'] > 0]
-        return {'message': f"{json['target']}에게 {json['name']}을 사용했습니다."}
+        acct = target.lstrip('@')
+        return {'message': f"{acct}에게 {json['name']}을 사용했습니다.", 'notify': [acct] if acct.lower() != json['acct'].lower() else []}
 
 
     def post(self, path, json):
