@@ -148,6 +148,7 @@ class ServerSettings:
     # 컨텐츠 설정 > 상점에서 바꾼 명령어 이름 ({'buy': '사기', 'stat_change': '변경', ...}) 과 운영진 계정
     commands: Dict[str, str] = field(default_factory=dict)
     admins: List[str] = field(default_factory=list)
+    manito_command: str = ''            # 마니또 추측 명령어 (마스토돈 RP > 마니또 설정, 기본 '마니또')
 
 
 class LedgerError(Exception):
@@ -246,6 +247,7 @@ class ServerLedger:
                 admins=[str(acct).strip().lstrip('@') for acct in data.get('admins') or [] if str(acct).strip()],
                 basic_help=list(data.get('basic_help') or []),
                 help_command=str(data.get('help_command') or '').strip(),
+                manito_command=str(data.get('manito_command') or '').strip(),
                 help_topics=[HelpTopic(key=str(topic.get('key') or ''), command=str(topic.get('command') or ''),
                                        description=str(topic.get('description') or ''), admin=bool(topic.get('admin')))
                              for topic in data.get('help_topics') or [] if topic.get('command')],
@@ -323,6 +325,15 @@ class ServerLedger:
         with self._lock:
             self._cache.pop('characters', None)
         return result.get('message') or '', [str(acct) for acct in result.get('notify') or []]
+
+    def manito_guess(self, acct: str, word: str, target: str) -> Optional[str]:
+        """[마니또/단어/캐릭터]: 서버가 판정하고(정답이면 보상을 옮기고 들킨 사람에게 DM) 답할 문구를 돌려준다. 등록 안 된 사람이면 None."""
+        result = self.api.post('manito/guess', {'acct': acct, 'word': word, 'target': target})
+        if result is None:
+            return None
+        with self._lock:
+            self._cache.pop('characters', None)
+        return result.get('message') or ''
 
     # ---- 상점
 

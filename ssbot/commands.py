@@ -6,6 +6,7 @@
   3. 상점               [가방] [상점] [구매/템] [설명/템] [버리기/템]
   4. 스탯               [상태 확인] [사용/템]
   5. 옵션               [양도/..] [출석] [랜덤박스/박스]
+     마니또             [마니또/단어/캐릭터] (판정은 마스토돈 서버, RP > 마니또 설정)
   6. 조사               [장소 목록] [진입/장소] [조사/포인트]
   7. 키워드 시트        운영진이 적은 키워드 답변
 
@@ -151,7 +152,7 @@ class Processor:
         fallback = request.display_name or request.user
         caster = self.ledger.display_name(request.user, fallback) if self.ledger.available else fallback
 
-        for handler in (self._admin, self._basic, self._shop, self._stats, self._options):
+        for handler in (self._admin, self._basic, self._shop, self._stats, self._options, self._manito):
             try:
                 reply = handler(request, key, head, args, caster)
             except LedgerError as error:
@@ -428,6 +429,18 @@ class Processor:
         if key == normalize_key(self.config.randombox_command) and self.sheets.rows_or_empty('main', RANDOMBOX):
             return self._randombox(request, args)
         return None
+
+    def _manito(self, request, key, head, args, caster):
+        """[마니또/단어/캐릭터 이름이나 아이디]: 내게 몰래 단어를 쓴 캐릭터를 맞힌다. 맞았는지·보상은 서버가 정한다."""
+        if not self.ledger.available:
+            return None
+        name = self.ledger.settings().manito_command or '마니또'
+        if key != normalize_key(name):
+            return None
+        if len(args) < 2 or not args[0] or not args[1]:
+            return f'형식: [{name}/단어/캐릭터]'
+        message = self.ledger.manito_guess(request.user, args[0], '/'.join(args[1:]))
+        return self._not_registered() if message is None else message
 
     def _transfer(self, request, head, args):
         if not self.ledger.available:

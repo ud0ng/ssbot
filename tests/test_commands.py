@@ -192,3 +192,11 @@ def test_transfer_finds_the_character_by_the_first_part_of_the_name(bot):
     assert '소피아에게 5코인을 양도했습니다' in bot('양도/5코인/소피')
     assert character(bot, 'Sophia')['money'] == 6
     assert '찾을 수 없습니다' in bot('양도/1/없는이름')
+
+
+def test_manito_guess_goes_to_the_server(bot, server):
+    assert bot('마니또/하지마/엘레나', user='Sophia') == '정답입니다.'
+    assert server.manito_guesses[-1] == {'acct': 'Sophia', 'word': '하지마', 'target': '엘레나'}
+    assert bot('마니또/아무말/엘레나') == '오답입니다.'
+    assert '캐릭터를 찾을 수 없습니다' in bot('마니또/하지마/없는사람')
+    assert bot('마니또/하지마').startswith('형식:')
